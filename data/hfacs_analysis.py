@@ -1,19 +1,23 @@
 """
-HFACS Extraction Results — Data Analysis
-=========================================
-Analyzes hfacs_results.csv produced by hfacs_extractor.py.
+HFACS Extraction Results — Data Analysis (Stage 2 output)
+=========================================================
+Analyzes the new ``hfacs_results.csv`` produced by hfacs_extractor.py, whose
+columns are:
 
-The extractor emits one boolean column (YES/NO) per HFACS subcategory across
-all five tiers in the consolidated HFACS_SCHEMA (Organizational Climate,
-Supervisory Conditions, Personnel Conditions, Operator Conditions,
-Unsafe Acts). This script summarizes that output.
+    ev_id, entities_json, hfacs_json, relationships_json, extraction_status
 
-Outputs:
-  figures/hfacs_distributions.png  — YES-rate bar chart per tier (5 panels)
-  figures/hfacs_cooccurrence.png   — pairwise YES co-occurrence heatmap
-  figures/hfacs_combinations.png   — top-15 YES-subcategory combinations
-  figures/hfacs_coverage.png       — per-tier coverage + YES-count histogram
-  figures/hfacs_severity.png       — severity-level distribution
+``hfacs_json`` is a JSON object ``{tier: [subcategory, ...]}`` validated against
+the 15-tier ``HFACS_SCHEMA``. ``relationships_json`` is a JSON list of
+``{subject, relation, object, evidence}`` directed causal edges. This script
+imports ``HFACS_SCHEMA`` directly from hfacs_extractor (single source of truth).
+
+Outputs (to figures/):
+  hfacs_distributions.png  — subcategory frequency, one panel per tier
+  hfacs_cooccurrence.png   — pairwise subcategory co-occurrence (observed subs)
+  hfacs_combinations.png   — top-15 tier combinations per record
+  hfacs_coverage.png       — per-tier coverage + tiers-per-row + status counts
+  hfacs_relationships.png  — relation-type counts + top causal edges
+  hfacs_severity.png       — severity distribution (joined from ntsb_clean.csv)
   Console: full numeric summary
 
 Usage:
@@ -22,9 +26,11 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import sys
 import traceback
+from collections import Counter
 from pathlib import Path
 
 import pandas as pd
@@ -33,306 +39,378 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+# Import the schema from the extractor (same directory) — single source of truth.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from hfacs_extractor import HFACS_SCHEMA, VALID_RELATIONS  # noqa: E402
 
-from config.dag_config import HFACS_SCHEMA
-from models.lstm.severity import derive_severity_label
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-ALL_SUBS: list[str] = [s for tier in HFACS_SCHEMA.values() for s in tier["subs"]]
 TIER_ORDER: list[str] = list(HFACS_SCHEMA.keys())
+ALL_SUBS: list[str] = [s for subs in HFACS_SCHEMA.values() for s in subs]
+SUB_TO_TIER: dict[str, str] = {s: t for t, subs in HFACS_SCHEMA.items() for s in subs}
 
-COLORS = {
-    # Organizational Climate
-    "Safety Culture":                      "#5A189A",
-    "Structure":                           "#9D4EDD",
-    # Supervisory
-    "Inadequate Supervision":              "#4C72B0",
-    "Planned Inappropriate Operations":    "#0077B6",
-    "Failed to Correct Known Problem":     "#023E8A",
-    # Personnel
-    "Crew Resource Management":            "#8338EC",
-    "Personal Readiness":                  "#3A86FF",
-    # Operator
-    "Adverse Mental State":                "#DD8452",
-    "Adverse Physiological State":         "#C44E52",
-    # Unsafe Acts
-    "Decision Errors":                     "#55A868",
-    "Skill-based Errors":                  "#2D6A4F",
-    "Perceptual Errors":                   "#95D5B2",
-    "Routine Violations":                  "#E76F51",
+TIER_LABELS = {
+    "org_climate":         "Organizational Climate",
+    "resource_mgmt":       "Resource Management",
+    "org_process":         "Organizational Process",
+    "supervisory":         "Supervisory",
+    "situational_phys":    "Situational — Physical Env",
+    "situational_tech":    "Situational — Technological",
+    "operator_mental":     "Operator — Mental State",
+    "operator_physical":   "Operator — Physiological",
+    "operator_limits":     "Operator — Limitations",
+    "personnel_crm":       "Personnel — CRM",
+    "personnel_readiness": "Personnel — Readiness",
+    "unsafe_skill":        "Unsafe Acts — Skill",
+    "unsafe_decision":     "Unsafe Acts — Decision",
+    "unsafe_perception":   "Unsafe Acts — Perception",
+    "unsafe_violation":    "Unsafe Acts — Violation",
+}
+
+# A distinct colour per tier; subcategories inherit their tier colour.
+_TIER_COLORS = {
+    "org_climate": "#5A189A", "resource_mgmt": "#7B2CBF", "org_process": "#9D4EDD",
+    "supervisory": "#3A0CA3", "situational_phys": "#4361EE",
+    "situational_tech": "#4895EF", "operator_mental": "#DD8452",
+    "operator_physical": "#C44E52", "operator_limits": "#E76F51",
+    "personnel_crm": "#8338EC", "personnel_readiness": "#3A86FF",
+    "unsafe_skill": "#2D6A4F", "unsafe_decision": "#55A868",
+    "unsafe_perception": "#95D5B2", "unsafe_violation": "#E9C46A",
 }
 
 
 # ---------------------------------------------------------------------------
-# Load & validate
+# Load & parse
 # ---------------------------------------------------------------------------
 
-def load(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path, encoding="latin1")
-    missing = [s for s in ALL_SUBS if s not in df.columns]
-    if missing:
-        raise ValueError(f"Missing subcategory columns in results file: {missing}")
+def _parse_json(cell, default):
+    try:
+        v = json.loads(cell) if isinstance(cell, str) and cell.strip() else default
+        return v if v is not None else default
+    except (json.JSONDecodeError, TypeError):
+        return default
 
-    for s in ALL_SUBS:
-        df[s] = df[s].astype(str).str.strip().str.upper()
-        bad = ~df[s].isin({"YES", "NO"})
-        n_bad = int(bad.sum())
-        if n_bad:
-            print(f"  warning: {n_bad} non-YES/NO values in column '{s}' "
-                  f"(treated as NO)")
-            df.loc[bad, s] = "NO"
+
+def load(path: str) -> pd.DataFrame:
+    df = pd.read_csv(path, dtype=str)
+    required = {"ev_id", "hfacs_json", "relationships_json", "extraction_status"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing expected columns in {path}: {sorted(missing)}")
+
+    df["hfacs"] = df["hfacs_json"].apply(lambda c: _parse_json(c, {}))
+    df["relationships"] = df["relationships_json"].apply(lambda c: _parse_json(c, []))
+    if "entities_json" in df.columns:
+        df["entities"] = df["entities_json"].apply(lambda c: _parse_json(c, []))
+    else:
+        df["entities"] = [[] for _ in range(len(df))]
     return df
 
 
-def _yes_count(df: pd.DataFrame, sub: str) -> int:
-    return int((df[sub] == "YES").sum())
+def sub_matrix(df: pd.DataFrame) -> pd.DataFrame:
+    """Binary (rows × subcategory) presence matrix from the hfacs dicts."""
+    data = np.zeros((len(df), len(ALL_SUBS)), dtype=int)
+    col_idx = {s: i for i, s in enumerate(ALL_SUBS)}
+    for r, hfacs in enumerate(df["hfacs"]):
+        if not isinstance(hfacs, dict):
+            continue
+        for tier, subs in hfacs.items():
+            if not isinstance(subs, list):
+                continue
+            for s in subs:
+                if s in col_idx:
+                    data[r, col_idx[s]] = 1
+    return pd.DataFrame(data, columns=ALL_SUBS)
 
 
 # ---------------------------------------------------------------------------
-# 1. Distribution bar charts — one panel per tier
+# 1. Subcategory distribution — one panel per tier
 # ---------------------------------------------------------------------------
 
-def plot_distributions(df: pd.DataFrame, out_dir: Path) -> None:
-    total = len(df)
-    fig, axes = plt.subplots(2, 3, figsize=(20, 10))
-    fig.suptitle("HFACS Subcategory YES Rates by Tier",
-                 fontsize=16, fontweight="bold", y=1.00)
+def plot_distributions(df: pd.DataFrame, mat: pd.DataFrame, out_dir: Path) -> None:
+    total = max(len(df), 1)
+    fig, axes = plt.subplots(4, 4, figsize=(22, 16))
+    fig.suptitle("HFACS Subcategory Frequency by Tier", fontsize=16,
+                 fontweight="bold", y=1.00)
+    flat = axes.flatten()
 
-    flat_axes = axes.flatten()
-    for ax, tier_id in zip(flat_axes, TIER_ORDER):
-        tier = HFACS_SCHEMA[tier_id]
-        subs = tier["subs"]
-        counts = [_yes_count(df, s) for s in subs]
-        rates = [100 * c / total for c in counts]
-        colors = [COLORS.get(s, "#999999") for s in subs]
-
-        bars = ax.barh(subs[::-1], counts[::-1], color=colors[::-1],
+    for ax, tier in zip(flat, TIER_ORDER):
+        subs = HFACS_SCHEMA[tier]
+        counts = [int(mat[s].sum()) for s in subs]
+        color = _TIER_COLORS.get(tier, "#999999")
+        bars = ax.barh(subs[::-1], counts[::-1], color=color,
                        edgecolor="white", linewidth=0.5)
-
-        for bar, cnt, rate in zip(bars, counts[::-1], rates[::-1]):
-            ax.text(
-                bar.get_width() + max(counts) * 0.01,
-                bar.get_y() + bar.get_height() / 2,
-                f"{cnt:,}  ({rate:.1f}%)",
-                va="center", ha="left", fontsize=9,
-            )
-
-        ax.set_title(tier["label"], fontsize=12, fontweight="bold")
-        ax.set_xlabel("YES count")
-        ax.set_xlim(0, max(counts) * 1.35 if max(counts) else 1)
+        max_c = max(counts) if counts else 1
+        for bar, cnt in zip(bars, counts[::-1]):
+            ax.text(bar.get_width() + max_c * 0.01,
+                    bar.get_y() + bar.get_height() / 2,
+                    f"{cnt:,} ({100*cnt/total:.1f}%)",
+                    va="center", ha="left", fontsize=8)
+        ax.set_title(TIER_LABELS.get(tier, tier), fontsize=11, fontweight="bold")
+        ax.set_xlim(0, max_c * 1.4 if max_c else 1)
+        ax.tick_params(axis="y", labelsize=8)
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
-        ax.tick_params(axis="y", labelsize=9)
 
-    # Hide unused panels (we have 5 tiers, 6 cells)
-    for ax in flat_axes[len(TIER_ORDER):]:
+    for ax in flat[len(TIER_ORDER):]:
         ax.set_visible(False)
 
     plt.tight_layout()
     out = out_dir / "hfacs_distributions.png"
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out}")
 
 
 # ---------------------------------------------------------------------------
-# 2. Pairwise co-occurrence heatmap (all 13 subcategories)
+# 2. Pairwise co-occurrence among OBSERVED subcategories
 # ---------------------------------------------------------------------------
 
-def plot_cooccurrence(df: pd.DataFrame, out_dir: Path) -> None:
-    yes_mat = (df[ALL_SUBS] == "YES").astype(int).to_numpy()
-    co = yes_mat.T @ yes_mat  # (n_subs, n_subs) co-occurrence counts
+def plot_cooccurrence(mat: pd.DataFrame, out_dir: Path) -> None:
+    observed = [s for s in ALL_SUBS if mat[s].sum() > 0]
+    if len(observed) < 2:
+        print("  skip co-occurrence: fewer than 2 observed subcategories")
+        return
+    sub = mat[observed].to_numpy()
+    co = sub.T @ sub
 
-    fig, ax = plt.subplots(figsize=(12, 10))
+    fig, ax = plt.subplots(figsize=(max(10, len(observed) * 0.5),
+                                    max(8, len(observed) * 0.5)))
     im = ax.imshow(co, cmap="Blues", aspect="auto")
-
-    ax.set_xticks(range(len(ALL_SUBS)))
-    ax.set_yticks(range(len(ALL_SUBS)))
-    ax.set_xticklabels(ALL_SUBS, rotation=45, ha="right", fontsize=8)
-    ax.set_yticklabels(ALL_SUBS, fontsize=8)
-    ax.set_title("HFACS Pairwise YES Co-occurrence (counts)",
-                 fontsize=14, fontweight="bold")
-
-    # Draw separator lines between tiers
-    boundary = 0
-    for tier_id in TIER_ORDER[:-1]:
-        boundary += len(HFACS_SCHEMA[tier_id]["subs"])
-        ax.axhline(boundary - 0.5, color="black", lw=0.6, alpha=0.5)
-        ax.axvline(boundary - 0.5, color="black", lw=0.6, alpha=0.5)
+    ax.set_xticks(range(len(observed)))
+    ax.set_yticks(range(len(observed)))
+    ax.set_xticklabels(observed, rotation=45, ha="right", fontsize=7)
+    ax.set_yticklabels(observed, fontsize=7)
+    ax.set_title("HFACS Pairwise Subcategory Co-occurrence (counts)",
+                 fontsize=13, fontweight="bold")
 
     vmax = co.max() if co.size else 1
-    for i in range(len(ALL_SUBS)):
-        for j in range(len(ALL_SUBS)):
-            val = co[i, j]
-            color = "white" if val > vmax * 0.6 else "black"
-            ax.text(j, i, str(val), ha="center", va="center",
-                    fontsize=7, color=color)
-
+    for i in range(len(observed)):
+        for j in range(len(observed)):
+            v = co[i, j]
+            if v:
+                ax.text(j, i, str(v), ha="center", va="center", fontsize=6,
+                        color="white" if v > vmax * 0.6 else "black")
     plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     plt.tight_layout()
     out = out_dir / "hfacs_cooccurrence.png"
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out}")
 
 
 # ---------------------------------------------------------------------------
-# 3. Top YES-subcategory combinations
+# 3. Top tier combinations per record
 # ---------------------------------------------------------------------------
 
-def _row_combo(row: pd.Series) -> str:
-    yes_subs = [s for s in ALL_SUBS if row[s] == "YES"]
-    return " + ".join(yes_subs) if yes_subs else "(none)"
+def _tier_combo(hfacs: dict) -> str:
+    if not isinstance(hfacs, dict):
+        return "(none)"
+    tiers = [TIER_LABELS.get(t, t) for t in TIER_ORDER if hfacs.get(t)]
+    return " + ".join(tiers) if tiers else "(none)"
 
 
 def plot_combinations(df: pd.DataFrame, out_dir: Path, top_n: int = 15) -> None:
-    combos = df.apply(_row_combo, axis=1)
+    combos = df["hfacs"].apply(_tier_combo)
     counts = combos.value_counts().head(top_n)
-    total = len(df)
+    total = max(len(df), 1)
 
     fig, ax = plt.subplots(figsize=(16, 8))
     bars = ax.barh(counts.index[::-1], counts.values[::-1],
                    color="#4C72B0", edgecolor="white", linewidth=0.5)
-
     for bar, val in zip(bars, counts.values[::-1]):
-        pct = 100 * val / total
-        ax.text(
-            bar.get_width() + counts.max() * 0.005,
-            bar.get_y() + bar.get_height() / 2,
-            f"{val:,}  ({pct:.1f}%)",
-            va="center", ha="left", fontsize=9,
-        )
-
-    ax.set_title(f"Top {top_n} HFACS YES-Subcategory Combinations",
+        ax.text(bar.get_width() + counts.max() * 0.005,
+                bar.get_y() + bar.get_height() / 2,
+                f"{val:,} ({100*val/total:.1f}%)",
+                va="center", ha="left", fontsize=9)
+    ax.set_title(f"Top {top_n} HFACS Tier Combinations per Record",
                  fontsize=13, fontweight="bold")
     ax.set_xlabel("Count")
-    ax.set_xlim(0, counts.max() * 1.3)
-    ax.tick_params(axis="y", labelsize=7)
+    ax.set_xlim(0, counts.max() * 1.3 if len(counts) else 1)
+    ax.tick_params(axis="y", labelsize=8)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-
     plt.tight_layout()
     out = out_dir / "hfacs_combinations.png"
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out}")
 
 
 # ---------------------------------------------------------------------------
-# 4. Coverage — per-tier any-YES rate + YES-count histogram
+# 4. Coverage + tiers-per-row + extraction status
 # ---------------------------------------------------------------------------
 
 def plot_coverage(df: pd.DataFrame, out_dir: Path) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(16, 5))
+    total = max(len(df), 1)
+    fig, axes = plt.subplots(1, 3, figsize=(22, 6))
     fig.suptitle("Extraction Coverage Overview", fontsize=14, fontweight="bold")
 
-    # Left: per-tier "% rows with >=1 YES in tier"
+    # Left: per-tier "% rows with >=1 subcategory"
     ax = axes[0]
-    tier_labels = [HFACS_SCHEMA[t]["label"] for t in TIER_ORDER]
-    any_yes = []
-    no_yes = []
-    for t in TIER_ORDER:
-        subs = HFACS_SCHEMA[t]["subs"]
-        has_yes = (df[subs] == "YES").any(axis=1)
-        any_yes.append(100 * has_yes.mean())
-        no_yes.append(100 - any_yes[-1])
+    labels = [TIER_LABELS.get(t, t) for t in TIER_ORDER]
+    has = [100 * df["hfacs"].apply(lambda h: bool(h.get(t))).mean()
+           for t in TIER_ORDER]
+    y = np.arange(len(labels))
+    ax.barh(y, has, color="#55A868")
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.invert_yaxis()
+    ax.set_xlabel("% of records with ≥1 subcategory")
+    ax.set_xlim(0, 100)
+    ax.set_title("Per-tier coverage")
+    for i, v in enumerate(has):
+        ax.text(v + 1, i, f"{v:.1f}%", va="center", fontsize=8)
 
-    x = np.arange(len(tier_labels))
-    w = 0.55
-    b1 = ax.bar(x, any_yes, w, label=">=1 YES", color="#55A868")
-    b2 = ax.bar(x, no_yes, w, bottom=any_yes, label="all NO", color="#CCCCCC")
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(tier_labels, fontsize=9, rotation=15, ha="right")
-    ax.set_ylabel("Percentage of rows (%)")
-    ax.set_ylim(0, 110)
-    ax.set_title("Per-tier YES coverage")
-    ax.legend(loc="upper right", fontsize=9)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-
-    for bar, val in zip(b1, any_yes):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() / 2,
-                f"{val:.1f}%", ha="center", va="center", fontsize=9,
-                color="white", fontweight="bold")
-    for bar, val, base in zip(b2, no_yes, any_yes):
-        if val > 2:
-            ax.text(bar.get_x() + bar.get_width() / 2, base + val / 2,
-                    f"{val:.1f}%", ha="center", va="center",
-                    fontsize=9, color="#555555")
-
-    # Right: histogram of YES count per row
+    # Middle: tiers-per-row histogram
     ax2 = axes[1]
-    yes_count = (df[ALL_SUBS] == "YES").sum(axis=1)
-    bins = np.arange(0, len(ALL_SUBS) + 2) - 0.5
-    ax2.hist(yes_count, bins=bins, color="#4C72B0", edgecolor="white")
-    ax2.set_xlabel("Number of YES subcategories per row")
-    ax2.set_ylabel("Row count")
-    ax2.set_title(f"YES-count distribution per row (of {len(ALL_SUBS)} subs)")
-    ax2.set_xticks(range(0, len(ALL_SUBS) + 1))
+    n_tiers = df["hfacs"].apply(lambda h: sum(1 for t in TIER_ORDER if h.get(t)))
+    bins = np.arange(0, len(TIER_ORDER) + 2) - 0.5
+    ax2.hist(n_tiers, bins=bins, color="#4C72B0", edgecolor="white")
+    ax2.axvline(n_tiers.mean(), color="#C44E52", linestyle="--", lw=1.5,
+                label=f"mean = {n_tiers.mean():.2f}")
+    ax2.set_xlabel("Number of tiers per record")
+    ax2.set_ylabel("Record count")
+    ax2.set_title("Tiers-per-record distribution")
+    ax2.legend(fontsize=9)
     ax2.spines["top"].set_visible(False)
     ax2.spines["right"].set_visible(False)
 
-    mean_yes = yes_count.mean()
-    ax2.axvline(mean_yes, color="#C44E52", linestyle="--", lw=1.5,
-                label=f"mean = {mean_yes:.2f}")
-    ax2.legend(loc="upper right", fontsize=9)
+    # Right: extraction status
+    ax3 = axes[2]
+    status = df["extraction_status"].value_counts()
+    colors = {"success": "#55A868", "empty": "#E9C46A", "parse_error": "#C44E52"}
+    bars = ax3.bar(status.index, status.values,
+                   color=[colors.get(s, "#999999") for s in status.index],
+                   edgecolor="white")
+    for bar, v in zip(bars, status.values):
+        ax3.text(bar.get_x() + bar.get_width() / 2, v + total * 0.005,
+                 f"{v:,}\n({100*v/total:.1f}%)", ha="center", va="bottom",
+                 fontsize=9)
+    ax3.set_title("Extraction status")
+    ax3.set_ylabel("Record count")
+    ax3.set_ylim(0, status.max() * 1.18 if len(status) else 1)
+    ax3.spines["top"].set_visible(False)
+    ax3.spines["right"].set_visible(False)
 
     plt.tight_layout()
     out = out_dir / "hfacs_coverage.png"
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out}")
 
 
 # ---------------------------------------------------------------------------
-# 5. Event severity distribution
+# 5. Relationship analysis
 # ---------------------------------------------------------------------------
 
-SEVERITY_LABELS = {1: "1 - IA (incident)", 2: "2 - CA", 3: "3 - LA", 4: "4 - MA/FA (fatal/major)"}
+def _all_relationships(df: pd.DataFrame) -> list[dict]:
+    rels = []
+    for lst in df["relationships"]:
+        if isinstance(lst, list):
+            rels.extend(r for r in lst if isinstance(r, dict))
+    return rels
+
+
+def plot_relationships(df: pd.DataFrame, out_dir: Path, top_n: int = 20) -> None:
+    rels = _all_relationships(df)
+    if not rels:
+        print("  skip relationships: none extracted")
+        return
+
+    rel_types = Counter(r.get("relation") for r in rels)
+    edges = Counter(
+        f"{r.get('subject')}  →  {r.get('object')}"
+        for r in rels
+        if r.get("relation") == "LEADS_TO"
+    )
+    top_edges = edges.most_common(top_n)
+
+    fig, axes = plt.subplots(1, 2, figsize=(20, 8),
+                             gridspec_kw={"width_ratios": [1, 2]})
+    fig.suptitle("HFACS Causal Relationship Extraction", fontsize=14,
+                 fontweight="bold")
+
+    ax = axes[0]
+    rt_labels = list(rel_types.keys())
+    rt_vals = [rel_types[k] for k in rt_labels]
+    ax.bar(rt_labels, rt_vals, color=["#2D6A4F", "#4895EF"][:len(rt_labels)],
+           edgecolor="white")
+    for i, v in enumerate(rt_vals):
+        ax.text(i, v, f"{v:,}", ha="center", va="bottom", fontsize=10)
+    ax.set_title(f"Relation types (n={len(rels):,})")
+    ax.set_ylabel("Count")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    ax2 = axes[1]
+    if top_edges:
+        labels = [e for e, _ in top_edges][::-1]
+        vals = [c for _, c in top_edges][::-1]
+        ax2.barh(labels, vals, color="#55A868", edgecolor="white")
+        for i, v in enumerate(vals):
+            ax2.text(v, i, f" {v}", va="center", fontsize=8)
+        ax2.set_title(f"Top {len(top_edges)} LEADS_TO edges")
+        ax2.tick_params(axis="y", labelsize=7)
+    else:
+        ax2.text(0.5, 0.5, "No LEADS_TO edges", ha="center", va="center")
+        ax2.set_axis_off()
+    ax2.spines["top"].set_visible(False)
+    ax2.spines["right"].set_visible(False)
+
+    plt.tight_layout()
+    out = out_dir / "hfacs_relationships.png"
+    fig.savefig(out, dpi=140, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out}")
+
+
+# ---------------------------------------------------------------------------
+# 6. Severity distribution (joined from ntsb_clean.csv on ev_id)
+# ---------------------------------------------------------------------------
+
+SEVERITY_LABELS = {0: "0 - Incident", 1: "1 - No injury", 2: "2 - 1 injury",
+                   3: "3 - 2–3 injuries", 4: "4 - 4+ / fatal"}
 
 
 def plot_severity(df: pd.DataFrame, out_dir: Path) -> None:
-    if "NtsbNo" not in df.columns:
-        print("  skip severity: 'NtsbNo' column not present")
+    clean_path = Path(_HERE) / "ntsb_clean.csv"
+    if not clean_path.exists():
+        print("  skip severity: ntsb_clean.csv not found")
         return
-
-    severities = df["NtsbNo"].map(derive_severity_label)
-    total = len(severities)
-    counts = severities.value_counts().sort_index()
+    clean = pd.read_csv(clean_path, dtype=str)[["ev_id", "severity_class"]]
+    merged = df.merge(clean, on="ev_id", how="left")
+    sev = pd.to_numeric(merged["severity_class"], errors="coerce").dropna().astype(int)
+    if sev.empty:
+        print("  skip severity: no severity_class values joined")
+        return
+    counts = sev.value_counts().sort_index()
+    total = max(len(sev), 1)
 
     fig, ax = plt.subplots(figsize=(10, 6))
     levels = sorted(counts.index.tolist())
     labels = [SEVERITY_LABELS.get(int(lv), str(lv)) for lv in levels]
     values = [int(counts[lv]) for lv in levels]
-    colors = ["#95D5B2", "#55A868", "#DD8452", "#C44E52"][: len(levels)]
-
-    bars = ax.bar(labels, values, color=colors, edgecolor="white", linewidth=0.5)
-    for bar, val in zip(bars, values):
-        pct = 100 * val / total
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + max(values) * 0.01,
-            f"{val:,}\n({pct:.1f}%)",
-            ha="center", va="bottom", fontsize=10,
-        )
-
-    ax.set_title("Event Severity Distribution (from NtsbNo suffix)",
+    colors = ["#CCCCCC", "#95D5B2", "#55A868", "#DD8452", "#C44E52"]
+    bars = ax.bar(labels, values, color=colors[:len(levels)], edgecolor="white")
+    for bar, v in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2, v + max(values) * 0.01,
+                f"{v:,}\n({100*v/total:.1f}%)", ha="center", va="bottom",
+                fontsize=10)
+    ax.set_title("Severity Distribution of Extracted Records",
                  fontsize=13, fontweight="bold")
-    ax.set_ylabel("Number of events")
+    ax.set_ylabel("Number of records")
     ax.set_ylim(0, max(values) * 1.18)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-
     plt.tight_layout()
     out = out_dir / "hfacs_severity.png"
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(out, dpi=140, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out}")
 
@@ -341,43 +419,35 @@ def plot_severity(df: pd.DataFrame, out_dir: Path) -> None:
 # Console summary
 # ---------------------------------------------------------------------------
 
-def print_summary(df: pd.DataFrame) -> None:
-    total = len(df)
-    print(f"\n{'='*64}")
-    print(f"  HFACS Extraction Analysis  --  {total:,} total rows")
-    print(f"{'='*64}\n")
+def print_summary(df: pd.DataFrame, mat: pd.DataFrame) -> None:
+    total = max(len(df), 1)
+    print(f"\n{'='*66}")
+    print(f"  HFACS Extraction Analysis  --  {len(df):,} rows")
+    print(f"{'='*66}\n")
 
-    for tier_id in TIER_ORDER:
-        tier = HFACS_SCHEMA[tier_id]
-        print(f"  {tier['label']}")
-        subs = tier["subs"]
-        any_yes = (df[subs] == "YES").any(axis=1).sum()
-        print(f"    Rows with >=1 YES in tier: {any_yes:4d} "
-              f"({100*any_yes/total:5.1f}%)")
-        for sub in subs:
-            cnt = _yes_count(df, sub)
-            print(f"      {sub:<40}  {cnt:4d}  ({100*cnt/total:5.1f}%)")
-        print()
-
-    print(f"  {'='*60}")
-    print(f"  Top 10 YES-subcategory combinations")
-    print(f"  {'='*60}")
-    combos = df.apply(_row_combo, axis=1)
-    for combo_label, cnt in combos.value_counts().head(10).items():
-        truncated = combo_label if len(combo_label) <= 80 else combo_label[:77] + "..."
-        print(f"    {cnt:4d}  ({100*cnt/total:4.1f}%)  {truncated}")
+    status = df["extraction_status"].value_counts()
+    print("  Extraction status:")
+    for s, c in status.items():
+        print(f"    {s:<14} {c:6,}  ({100*c/total:5.1f}%)")
     print()
 
-    if "NtsbNo" in df.columns:
-        sev = df["NtsbNo"].map(derive_severity_label)
-        sev_counts = sev.value_counts().sort_index()
-        print(f"  {'='*60}")
-        print(f"  Event severity distribution (from NtsbNo)")
-        print(f"  {'='*60}")
-        for lv, c in sev_counts.items():
-            label = SEVERITY_LABELS.get(int(lv), str(lv))
-            print(f"    {label:<30}  {c:4d}  ({100*c/total:5.1f}%)")
+    for tier in TIER_ORDER:
+        subs = HFACS_SCHEMA[tier]
+        any_sub = df["hfacs"].apply(lambda h: bool(h.get(tier))).sum()
+        print(f"  {TIER_LABELS.get(tier, tier)}  "
+              f"[>=1: {any_sub:,} ({100*any_sub/total:.1f}%)]")
+        for s in subs:
+            c = int(mat[s].sum())
+            print(f"      {s:<42} {c:6,}  ({100*c/total:5.1f}%)")
         print()
+
+    rels = _all_relationships(df)
+    print(f"  {'='*60}")
+    print(f"  Relationships: {len(rels):,} total")
+    rt = Counter(r.get("relation") for r in rels)
+    for k in sorted(VALID_RELATIONS):
+        print(f"    {k:<16} {rt.get(k, 0):,}")
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -394,22 +464,31 @@ def _safe(fn, *args, **kwargs) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="HFACS results data analysis")
-    _here = Path(__file__).parent
-    parser.add_argument("--input",   default=str(_here / "hfacs_results.csv"))
-    parser.add_argument("--out-dir", default=str(_here.parent / "figures"))
+    here = Path(__file__).parent
+    parser.add_argument("--input", default=str(here / "hfacs_results.csv"))
+    parser.add_argument("--out-dir", default=str(here.parent / "figures"))
     args = parser.parse_args()
+
+    # Windows consoles default to cp1252, which can't encode em-dashes/arrows
+    # used in tier labels; force UTF-8 so the summary prints cleanly.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     df = load(args.input)
+    mat = sub_matrix(df)
     print(f"Loaded {len(df):,} rows from {args.input}")
 
-    _safe(print_summary, df)
-    _safe(plot_distributions, df, out_dir)
-    _safe(plot_cooccurrence, df, out_dir)
+    _safe(print_summary, df, mat)
+    _safe(plot_distributions, df, mat, out_dir)
+    _safe(plot_cooccurrence, mat, out_dir)
     _safe(plot_combinations, df, out_dir)
     _safe(plot_coverage, df, out_dir)
+    _safe(plot_relationships, df, out_dir)
     _safe(plot_severity, df, out_dir)
 
     print(f"\nAll figures saved to {out_dir}/")
