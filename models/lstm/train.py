@@ -1,419 +1,345 @@
 """
-train.py
-========
-Four-step causal LSTM with an optional ordinal-severity head.
+train.py  (Stage 4)
+===================
+Multi-label causal-chain LSTM over the NTSB corpus:
 
-Steps:
-    A : Org. Climate + Employment        →  Supervisory Conditions  (logits_A)
-    0 : Weather/Time/Sky/Personnel/Sup.  →  Operator Conditions     (logits_B)
-    1 : soft_B | Supervisory             →  Unsafe Acts             (logits_C)
-    2 : soft_C | Supervisory             →  Severity (4-class)      (logits_D)
+    Step O : step_o                         -> O: Org. Influences   (multi-label, n_O)
+    Step A : step_a (org influences)        -> A: Supervisory       (multi-label, n_A)
+    Step B : step_b                         -> B: Preconditions     (multi-label, n_B)
+    Step C : proj_c([soft_B | supervisory]) -> C: Unsafe Acts       (multi-label, n_C)
+    Step D : proj_d([soft_C | env])         -> D: Severity          (single-class, n_D)
 
-Requirements: neo4j, ollama, pandas, torch, scikit-learn, anthropic (optional)
+O/A/B/C are multi-label (sigmoid + focal BCE) so co-occurring HFACS factors —
+within a step and across the chain — can be predicted. D (severity) is a
+single-class ordinal head (focal CE). Hidden state flows O->A->B->C->D; lower
+levels are teacher-forced (true org influences into A, true supervisory into B);
+soft predictions hand off B->C and C->D.
+
+The same class serves C1 (no RAG) and C4 (RAG priors appended; larger input
+dims). Dimensions are inferred from the first batch — nothing is hardcoded.
+ASIAS/ASRS never enter training.
+
+CLI:
+    python models/lstm/train.py                       # C1 baseline (no RAG)
+    python models/lstm/train.py --rag-strategy hybrid # C4 (RAG priors via Stage 5)
 """
 
+import argparse
 import copy
 import os
 import sys
+
+import numpy as np
 import torch
 import torch.nn as nn
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from sklearn.metrics import balanced_accuracy_score, f1_score, cohen_kappa_score
-from sklearn.utils.class_weight import compute_class_weight
-import numpy as np
 
-# Allow importing from data/ and config/
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
-from data.real_dataloader import get_dataloaders  # noqa: E402
+from data.ntsbdataloader import get_dataloaders, ENV_SLICE, SUP_START  # noqa: E402
 
 
-def class_weights(labels_tensor, n_classes, device):
-    """Square-root-dampened class weights (softer than full inverse-frequency)."""
-    labels = labels_tensor.numpy() if hasattr(labels_tensor, "numpy") else np.asarray(labels_tensor)
-    weights = compute_class_weight("balanced", classes=np.arange(n_classes), y=labels)
-    weights = np.sqrt(weights)           # dampen extremes
-    weights = weights / weights.mean()   # re-normalize for stable scale
-    return torch.tensor(weights, dtype=torch.float32, device=device)
+# ---------------------------------------------------------------------------
+# Losses & class weighting
+# ---------------------------------------------------------------------------
+
+def class_weights(labels_1d, n_classes, device):
+    """Single-class inverse-frequency weights, sqrt-dampened, mean-normalized (for D)."""
+    labels = np.asarray(labels_1d)
+    counts = np.bincount(labels, minlength=n_classes).astype("float64")
+    counts[counts == 0] = 1.0
+    w = counts.sum() / (n_classes * counts)
+    w = np.sqrt(w)
+    w = w / w.mean()
+    return torch.tensor(w, dtype=torch.float32, device=device)
+
+
+def pos_weights(multihot_2d, device):
+    """Per-label BCE pos_weight = neg/pos, sqrt-dampened, clamped (for O/A/B/C)."""
+    y = np.asarray(multihot_2d, dtype="float64")
+    n = y.shape[0]
+    pos = y.sum(axis=0)
+    pos[pos == 0] = 1.0
+    neg = n - pos
+    pw = np.sqrt(np.clip(neg / pos, 1.0, None))
+    return torch.tensor(pw, dtype=torch.float32, device=device)
 
 
 class FocalLoss(nn.Module):
-    """Weighted focal loss with (1-pt)^gamma modulator."""
+    """Single-class weighted focal cross-entropy (for severity D)."""
+
     def __init__(self, weight=None, gamma=2.0):
         super().__init__()
         self.weight = weight
-        self.gamma  = gamma
+        self.gamma = gamma
 
     def forward(self, logits, targets):
-        ce  = nn.functional.cross_entropy(logits, targets, weight=self.weight, reduction="none")
-        pt  = torch.exp(-ce)
+        ce = nn.functional.cross_entropy(logits, targets, weight=self.weight,
+                                         reduction="none")
+        pt = torch.exp(-ce)
         return ((1 - pt) ** self.gamma * ce).mean()
 
 
-# ── Model ────────────────────────────────────────────────────────────────────
+class MultiLabelFocalLoss(nn.Module):
+    """Sigmoid focal BCE for multi-label heads (O/A/B/C)."""
+
+    def __init__(self, pos_weight=None, gamma=2.0):
+        super().__init__()
+        self.pos_weight = pos_weight
+        self.gamma = gamma
+
+    def forward(self, logits, targets):
+        bce = nn.functional.binary_cross_entropy_with_logits(
+            logits, targets, pos_weight=self.pos_weight, reduction="none")
+        pt = torch.exp(-bce)
+        return ((1 - pt) ** self.gamma * bce).mean()
+
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
 
 class HFACSCausalLSTM(nn.Module):
-    """
-    Four-step causal LSTM following the consolidated HFACS DAG.
+    """Five-step causal LSTM; O/A/B/C multi-label, D single-class. See module docstring."""
 
-    Step A: [Organizational Climate | Employment]  dim=2
-              → predict A: Supervisory Conditions
-    Step 0: [Weather | TimeOfDay | SkyCondNonceil | Personnel | Supervisory]
-              → predict B: Operator Conditions
-    Step 1: embed_proj([soft_B | Supervisory])
-              → predict C: Unsafe Acts
-    Step 2: embed_proj_D([soft_C | Supervisory])
-              → predict D: Severity (4-class categorical, 0..3)
-    """
-
-    STEP_A_SIZE = 2  # Organizational Climate (encoded), Employment (numerical)
-    STEP0_SIZE  = 5  # 5 label-encoded categorical inputs
-
-    def __init__(self, hidden_size, n_A, n_B, n_C, n_D, dropout=0.2):
+    def __init__(self, hidden_size, n_O, n_A, n_B, n_C, n_D,
+                 step_o_dim, step_a_dim, step_b_dim, dropout=0.2):
         super().__init__()
         self.hidden_size = hidden_size
+        # Slices into step_b (base layout; priors are appended after, so valid in C4).
+        self.env_slice = ENV_SLICE                          # visual, light, sky
+        self.sup_slice = slice(SUP_START, SUP_START + n_A)  # supervisory multi-hot
 
-        self.cell_a     = nn.LSTMCell(self.STEP_A_SIZE, hidden_size)
-        self.cell_0     = nn.LSTMCell(self.STEP0_SIZE,  hidden_size)
-        self.cell_1     = nn.LSTMCell(self.STEP0_SIZE,  hidden_size)
-        self.cell_2     = nn.LSTMCell(self.STEP0_SIZE,  hidden_size)
-        self.drop       = nn.Dropout(dropout)
+        self.cell_o = nn.LSTMCell(step_o_dim, hidden_size)
+        self.cell_a = nn.LSTMCell(step_a_dim, hidden_size)
+        self.cell_b = nn.LSTMCell(step_b_dim, hidden_size)
+        self.cell_c = nn.LSTMCell(step_b_dim, hidden_size)
+        self.cell_d = nn.LSTMCell(step_b_dim, hidden_size)
+        self.drop = nn.Dropout(dropout)
 
-        # Project [soft_B (n_B) | Supervisory (1)] → STEP0_SIZE for cell_1
-        self.embed_proj = nn.Linear(n_B + 1, self.STEP0_SIZE)
-        # Project [soft_C (n_C) | Supervisory (1)] → STEP0_SIZE for cell_2
-        self.embed_proj_D = nn.Linear(n_C + 1, self.STEP0_SIZE)
+        self.proj_c = nn.Linear(n_B + n_A, step_b_dim)   # [soft_B | supervisory]
+        self.proj_d = nn.Linear(n_C + 3, step_b_dim)     # [soft_C | env(3)]
 
-        self.head_A = nn.Linear(hidden_size, n_A)
-        self.head_B = nn.Linear(hidden_size, n_B)
-        self.head_C = nn.Linear(hidden_size, n_C)
-        self.head_D = nn.Linear(hidden_size, n_D)
+        self.head_o = nn.Linear(hidden_size, n_O)
+        self.head_a = nn.Linear(hidden_size, n_A)
+        self.head_b = nn.Linear(hidden_size, n_B)
+        self.head_c = nn.Linear(hidden_size, n_C)
+        self.head_d = nn.Linear(hidden_size, n_D)
 
-    def forward(self, step_a, step0):
-        batch = step0.size(0)
-        zeros = lambda: torch.zeros(batch, self.hidden_size, device=step0.device)
+    def forward(self, step_o, step_a, step_b):
+        batch = step_b.size(0)
+        zeros = lambda: torch.zeros(batch, self.hidden_size, device=step_b.device)
 
-        # ── Step A → predict A (Supervisory Conditions) ───────────────────────
-        hA, _        = self.cell_a(step_a, (zeros(), zeros()))
-        logits_A     = self.head_A(self.drop(hA))
+        # Step O -> Organizational Influences
+        hO, cO = self.cell_o(step_o, (zeros(), zeros()))
+        logits_O = self.head_o(self.drop(hO))
 
-        # ── Step 0 → predict B (Operator Conditions) ─────────────────────────
-        h0, c0       = self.cell_0(step0, (zeros(), zeros()))
-        logits_B     = self.head_B(self.drop(h0))
-        soft_B       = torch.softmax(logits_B, dim=1)
+        # Step A -> Supervisory (step_a carries teacher-forced org influences)
+        hA, cA = self.cell_a(step_a, (hO.detach(), cO.detach()))
+        logits_A = self.head_a(self.drop(hA))
 
-        # ── Step 1 → predict C (Unsafe Acts) ─────────────────────────────────
-        supervisory  = step0[:, 4:5]
-        step1_in     = self.embed_proj(torch.cat([soft_B.detach(), supervisory], dim=1))
-        h1, c1       = self.cell_1(step1_in, (h0.detach(), c0.detach()))
-        logits_C     = self.head_C(self.drop(h1))
+        # Step B -> Preconditions (step_b carries teacher-forced supervisory block)
+        hB, cB = self.cell_b(step_b, (hA.detach(), cA.detach()))
+        logits_B = self.head_b(self.drop(hB))
+        soft_B = torch.sigmoid(logits_B).detach()
 
-        # ── Step 2 → predict D (Severity, 4-class categorical) ──────────────
-        soft_C       = torch.softmax(logits_C, dim=1)
-        step2_in     = self.embed_proj_D(torch.cat([soft_C.detach(), supervisory], dim=1))
-        h2, _        = self.cell_2(step2_in, (h1.detach(), c1.detach()))
-        logits_D     = self.head_D(self.drop(h2))
+        # Step C -> Unsafe Acts
+        sup = step_b[:, self.sup_slice]
+        c_in = self.proj_c(torch.cat([soft_B, sup], dim=1))
+        hC, cC = self.cell_c(c_in, (hB.detach(), cB.detach()))
+        logits_C = self.head_c(self.drop(hC))
+        soft_C = torch.sigmoid(logits_C).detach()
 
-        return logits_A, logits_B, logits_C, logits_D
+        # Step D -> Severity (single-class)
+        env = step_b[:, self.env_slice]
+        d_in = self.proj_d(torch.cat([soft_C, env], dim=1))
+        hD, _ = self.cell_d(d_in, (hC.detach(), cC.detach()))
+        logits_D = self.head_d(self.drop(hD))
+
+        return logits_O, logits_A, logits_B, logits_C, logits_D
 
 
-def train_epoch(model, loader, optimizer, crit_A, crit_B, crit_C, crit_D, device):
-    """One epoch of training; returns (loss, bA, bB, bC, bD, bal_avg)."""
+# ---------------------------------------------------------------------------
+# Train / evaluate
+# ---------------------------------------------------------------------------
+
+LOSS_WEIGHTS = (1.0, 1.5, 1.0, 1.5, 1.0)  # O, A, B, C, D
+
+
+def _joint_loss(logits, targets, crits):
+    return sum(w * c(l, t) for w, c, l, t in zip(LOSS_WEIGHTS, crits, logits, targets))
+
+
+def train_epoch(model, loader, optimizer, crits, device):
     model.train()
-    total_loss = 0
-    all_A, all_B, all_C, all_D = [], [], [], []
-    pred_A, pred_B, pred_C, pred_D = [], [], [], []
-
-    for batch in loader:
-        s_a, s0, y_A, y_B, y_C, y_D = batch
-        s_a, s0 = s_a.to(device), s0.to(device)
-        y_A = y_A.to(device); y_B = y_B.to(device)
-        y_C = y_C.to(device); y_D = y_D.to(device)
-
+    total = 0.0
+    for step_o, step_a, step_b, yO, yA, yB, yC, yD in loader:
+        step_o, step_a, step_b = step_o.to(device), step_a.to(device), step_b.to(device)
+        ys = [t.to(device) for t in (yO, yA, yB, yC, yD)]
         optimizer.zero_grad()
-        lA, lB, lC, lD = model(s_a, s0)
-
-        loss = (
-            1.5 * crit_A(lA, y_A)
-            + 1.0 * crit_B(lB, y_B)
-            + 1.5 * crit_C(lC, y_C)
-            + 1.0 * crit_D(lD, y_D)
-        )
-
+        loss = _joint_loss(model(step_o, step_a, step_b), ys, crits)
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-
-        total_loss += loss.item()
-        all_A.extend(y_A.cpu().tolist());  pred_A.extend(lA.argmax(1).cpu().tolist())
-        all_B.extend(y_B.cpu().tolist());  pred_B.extend(lB.argmax(1).cpu().tolist())
-        all_C.extend(y_C.cpu().tolist());  pred_C.extend(lC.argmax(1).cpu().tolist())
-        all_D.extend(y_D.cpu().tolist());  pred_D.extend(lD.argmax(1).cpu().tolist())
-
-    bal_A   = balanced_accuracy_score(all_A, pred_A)
-    bal_B   = balanced_accuracy_score(all_B, pred_B)
-    bal_C   = balanced_accuracy_score(all_C, pred_C)
-    bal_D   = balanced_accuracy_score(all_D, pred_D)
-    bal_avg = (bal_A + bal_B + bal_C + bal_D) / 4
-    return total_loss / len(loader), bal_A, bal_B, bal_C, bal_D, bal_avg
+        total += loss.item()
+    return total / max(len(loader), 1)
 
 
 def evaluate(model, loader, device):
-    """Inference helper; returns (all_A, all_B, all_C, all_D, pred_A, ...)."""
-    model.eval()
-    all_A,  all_B,  all_C,  all_D  = [], [], [], []
-    pred_A, pred_B, pred_C, pred_D = [], [], [], []
-
-    with torch.no_grad():
-        for batch in loader:
-            s_a, s0, y_A, y_B, y_C, y_D = batch
-            s_a = s_a.to(device); s0 = s0.to(device)
-            lA, lB, lC, lD = model(s_a, s0)
-            pred_A.extend(lA.argmax(1).cpu().tolist())
-            pred_B.extend(lB.argmax(1).cpu().tolist())
-            pred_C.extend(lC.argmax(1).cpu().tolist())
-            pred_D.extend(lD.argmax(1).cpu().tolist())
-            all_A.extend(y_A.tolist())
-            all_B.extend(y_B.tolist())
-            all_C.extend(y_C.tolist())
-            all_D.extend(y_D.tolist())
-
-    return all_A, all_B, all_C, all_D, pred_A, pred_B, pred_C, pred_D
-
-
-def evaluate_with_confidence(model, loader, device):
     """
-    Collect softmax probabilities for all four output heads.
-
-    Returns a dict keyed by head ('A', 'B', 'C', 'D') with sub-keys
-    'true' (int list), 'pred' (int list) and 'probs' (numpy array shape
-    (N, n_classes)).
+    Returns 10 values:
+        all_O, all_A, all_B, all_C, all_D, pred_O, pred_A, pred_B, pred_C, pred_D
+    O/A/B/C are multi-hot numpy arrays (preds use sigmoid>0.5); D is a 1-D array
+    of class indices (argmax). All callers must unpack exactly 10 values.
     """
     model.eval()
-    keys = ("A", "B", "C", "D")
-    bucket = {k: {"true": [], "pred": [], "probs": []} for k in keys}
-
+    aO, aA, aB, aC, aD = [], [], [], [], []
+    pO, pA, pB, pC, pD = [], [], [], [], []
     with torch.no_grad():
-        for batch in loader:
-            s_a, s0, y_A, y_B, y_C, y_D = batch
-            s_a = s_a.to(device); s0 = s0.to(device)
-            lA, lB, lC, lD = model(s_a, s0)
-            for k, logits, y in zip(
-                keys, (lA, lB, lC, lD), (y_A, y_B, y_C, y_D),
-            ):
-                probs = torch.softmax(logits, dim=1).cpu().numpy()
-                bucket[k]["probs"].append(probs)
-                bucket[k]["pred"].extend(logits.argmax(1).cpu().tolist())
-                bucket[k]["true"].extend(y.tolist())
-    for k in keys:
-        bucket[k]["probs"] = np.concatenate(bucket[k]["probs"], axis=0)
-    return bucket
+        for step_o, step_a, step_b, yO, yA, yB, yC, yD in loader:
+            step_o, step_a, step_b = step_o.to(device), step_a.to(device), step_b.to(device)
+            lO, lA, lB, lC, lD = model(step_o, step_a, step_b)
+            for logits, store in ((lO, pO), (lA, pA), (lB, pB), (lC, pC)):
+                store.append((torch.sigmoid(logits) > 0.5).int().cpu().numpy())
+            pD.extend(lD.argmax(1).cpu().tolist())
+            for y, store in ((yO, aO), (yA, aA), (yB, aB), (yC, aC)):
+                store.append(y.int().cpu().numpy())
+            aD.extend(yD.cpu().tolist())
+    cat = lambda xs: np.concatenate(xs, axis=0) if xs else np.empty((0,))
+    return (cat(aO), cat(aA), cat(aB), cat(aC), np.asarray(aD),
+            cat(pO), cat(pA), cat(pB), cat(pC), np.asarray(pD))
 
 
-# ── Reusable training function ────────────────────────────────────────────────
+def _build_criteria(train_set, n_D, device):
+    crit_O = MultiLabelFocalLoss(pos_weight=pos_weights(train_set.y_O.numpy(), device))
+    crit_A = MultiLabelFocalLoss(pos_weight=pos_weights(train_set.y_A.numpy(), device))
+    crit_B = MultiLabelFocalLoss(pos_weight=pos_weights(train_set.y_B.numpy(), device))
+    crit_C = MultiLabelFocalLoss(pos_weight=pos_weights(train_set.y_C.numpy(), device))
+    crit_D = FocalLoss(weight=class_weights(train_set.y_D.numpy(), n_D, device))
+    return crit_O, crit_A, crit_B, crit_C, crit_D
 
-def train_model(
-    train_loader,
-    encoders,
-    val_loader=None,
-    hidden_size=64,
-    lr=3e-4,
-    dropout=0.2,
-    epochs=500,
-    patience=200,
-    n_D=None,
-    device=None,
-    verbose=True,
-):
-    """Train HFACSCausalLSTM and return (model, history)."""
+
+def train_model(train_loader, val_loader, encoders, hidden_size=128, lr=1e-4,
+                dropout=0.1, epochs=500, patience=200, device=None, verbose=True):
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    n_A = len(encoders.enc_supervisory.classes_)
-    n_B = len(encoders.enc_operator.classes_)
-    n_C = len(encoders.enc_unsafe.classes_)
-    if n_D is None:
-        n_D = len(encoders.enc_severity.classes_)
-
-    model = HFACSCausalLSTM(
-        hidden_size=hidden_size,
-        n_A=n_A, n_B=n_B, n_C=n_C, n_D=n_D,
-        dropout=dropout,
-    ).to(device)
+    # Infer dims from the first batch — never hardcoded.
+    s_o, s_a, s_b, *_ = next(iter(train_loader))
+    config = dict(hidden_size=hidden_size,
+                  n_O=encoders.n_O, n_A=encoders.n_A, n_B=encoders.n_B,
+                  n_C=encoders.n_C, n_D=encoders.n_severity,
+                  step_o_dim=s_o.shape[1], step_a_dim=s_a.shape[1],
+                  step_b_dim=s_b.shape[1], dropout=dropout)
+    model = HFACSCausalLSTM(**config).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=10, min_lr=1e-5
-    )
+        optimizer, mode="min", factor=0.5, patience=10, min_lr=1e-5)
+    crits = _build_criteria(train_loader.dataset, config["n_D"], device)
 
-    train_set = train_loader.dataset
-    crit_A = FocalLoss(weight=class_weights(train_set.y_A, n_A, device), gamma=1.0)
-    crit_B = FocalLoss(weight=class_weights(train_set.y_B, n_B, device), gamma=2.0)
-    crit_C = FocalLoss(weight=class_weights(train_set.y_C, n_C, device), gamma=1.0)
-    crit_D = FocalLoss(weight=class_weights(train_set.y_D, n_D, device), gamma=1.0)
-
-    history = {"loss": [], "acc_A": [], "acc_B": [], "acc_C": [], "acc_D": [], "acc_avg": []}
-
-    best_val_loss = float("inf")
-    best_state    = None
-    no_improve    = 0
+    best_val, best_state, no_improve = float("inf"), None, 0
+    history = {"loss": [], "val_loss": []}
 
     for epoch in range(1, epochs + 1):
-        loss, acc_A, acc_B, acc_C, acc_D, acc_avg = train_epoch(
-            model, train_loader, optimizer, crit_A, crit_B, crit_C, crit_D, device
-        )
+        loss = train_epoch(model, train_loader, optimizer, crits, device)
         history["loss"].append(loss)
-        history["acc_A"].append(acc_A)
-        history["acc_B"].append(acc_B)
-        history["acc_C"].append(acc_C)
-        history["acc_D"].append(acc_D)
-        history["acc_avg"].append(acc_avg)
 
-        val_loss = None
-        if val_loader is not None:
-            model.eval()
-            total_val_loss = 0.0
-            with torch.no_grad():
-                for batch in val_loader:
-                    s_a, s0, y_A, y_B, y_C, y_D = batch
-                    s_a = s_a.to(device); s0 = s0.to(device)
-                    y_A = y_A.to(device); y_B = y_B.to(device)
-                    y_C = y_C.to(device); y_D = y_D.to(device)
-                    lA, lB, lC, lD = model(s_a, s0)
-                    batch_loss = (
-                        1.5 * crit_A(lA, y_A)
-                        + 1.0 * crit_B(lB, y_B)
-                        + 1.5 * crit_C(lC, y_C)
-                        + 1.0 * crit_D(lD, y_D)
-                    )
-                    total_val_loss += batch_loss.item()
-            model.train()
-            val_loss = total_val_loss / len(val_loader)
-            scheduler.step(val_loss)
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                best_state    = copy.deepcopy(model.state_dict())
-                no_improve    = 0
-            else:
-                no_improve += 1
+        model.eval()
+        vtotal = 0.0
+        with torch.no_grad():
+            for step_o, step_a, step_b, yO, yA, yB, yC, yD in val_loader:
+                step_o, step_a, step_b = step_o.to(device), step_a.to(device), step_b.to(device)
+                ys = [t.to(device) for t in (yO, yA, yB, yC, yD)]
+                vtotal += _joint_loss(model(step_o, step_a, step_b), ys, crits).item()
+        val_loss = vtotal / max(len(val_loader), 1)
+        history["val_loss"].append(val_loss)
+        scheduler.step(val_loss)
+
+        if val_loss < best_val:
+            best_val, best_state, no_improve = val_loss, copy.deepcopy(model.state_dict()), 0
         else:
-            scheduler.step(loss)
+            no_improve += 1
 
         if verbose:
-            current_lr = optimizer.param_groups[0]["lr"]
-            val_str = (f"  ValLoss: {val_loss:.4f} (best {best_val_loss:.4f})"
-                       if val_loader is not None else "")
-            print(
-                f"Epoch {epoch:03d}/{epochs} | Loss: {loss:.4f} | "
-                f"BalAcc A: {acc_A:.2%}  B: {acc_B:.2%}  C: {acc_C:.2%}  "
-                f"D: {acc_D:.2%}  Avg: {acc_avg:.2%} | "
-                f"LR: {current_lr:.2e}{val_str}"
-            )
-
-        if val_loader is not None and no_improve >= patience:
+            lr_now = optimizer.param_groups[0]["lr"]
+            print(f"Epoch {epoch:03d}/{epochs} | loss {loss:.4f} | "
+                  f"val {val_loss:.4f} (best {best_val:.4f}) | lr {lr_now:.2e}")
+        if no_improve >= patience:
             if verbose:
-                print(f"Early stopping at epoch {epoch} (no val loss improvement for {patience} epochs).")
+                print(f"Early stopping at epoch {epoch}.")
             break
 
     if best_state is not None:
         model.load_state_dict(best_state)
+    return model, history, config
 
-    return model, history
+
+# ---------------------------------------------------------------------------
+# Checkpoint
+# ---------------------------------------------------------------------------
+
+def save_checkpoint(model, encoders, path, config):
+    """Save weights + the full constructor config needed to reconstruct the model."""
+    torch.save({"state_dict": model.state_dict(), "config": config}, path)
+    print(f"Saved checkpoint to {path}")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def _build_retriever(strategy):
+    """Construct a Stage-5 RAG retriever if available; None otherwise (C1)."""
+    if not strategy:
+        return None
+    try:
+        from data.rag_retriever import build_retriever  # Stage 5
+        return build_retriever(strategy=strategy)
+    except Exception as e:
+        print(f"WARNING: RAG retriever unavailable ({e}); falling back to no-RAG.")
+        return None
+
 
 def main():
-    FILEPATH    = os.path.join(os.path.dirname(__file__), "..", "..", "data", "dataset.csv")
-    HIDDEN_SIZE = 128
-    BATCH_SIZE  = 32
-    EPOCHS      = 500
-    LR          = 1e-4
-    DROPOUT     = 0.1
-    DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    parser = argparse.ArgumentParser(description="Train the HFACS causal LSTM")
+    parser.add_argument("--rag-strategy", default=None,
+                        help="RAG strategy for C2-C4 (e.g. 'hybrid'); omit for C1.")
+    parser.add_argument("--hidden-size", type=int, default=128)
+    parser.add_argument("--epochs", type=int, default=500)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--dropout", type=float, default=0.1)
+    args = parser.parse_args()
 
-    train_loader, val_loader, _, encoders = get_dataloaders(FILEPATH, batch_size=BATCH_SIZE)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    retriever = _build_retriever(args.rag_strategy)
 
-    n_A = len(encoders.enc_supervisory.classes_)
-    n_B = len(encoders.enc_operator.classes_)
-    n_C = len(encoders.enc_unsafe.classes_)
-    n_D = len(encoders.enc_severity.classes_)
+    train_loader, val_loader, test_loader, encoders = get_dataloaders(
+        batch_size=args.batch_size, retriever=retriever)
 
     print("=" * 60)
-    print("LSTM Causal Architecture — Input/Output per Step")
+    print(f"Condition: {'C4 (RAG ' + args.rag_strategy + ')' if retriever else 'C1 (no RAG)'}")
+    print(f"Classes — O:{encoders.n_O} A:{encoders.n_A} B:{encoders.n_B} "
+          f"C:{encoders.n_C} D:{encoders.n_severity}")
     print("=" * 60)
-    print("Step A → predict: Supervisory Conditions")
-    print(f"  Classes: {list(encoders.enc_supervisory.classes_)}")
-    print("Step 0 → predict: Operator Conditions")
-    print(f"  Classes: {list(encoders.enc_operator.classes_)}")
-    print("Step 1 → predict: Unsafe Acts")
-    print(f"  Classes: {list(encoders.enc_unsafe.classes_)}")
-    print("Step 2 → predict: Severity (4-class)")
-    print(f"  Classes: {list(encoders.enc_severity.classes_)}")
-    print("=" * 60)
-    print(f"Classes — A: {n_A}  B: {n_B}  C: {n_C}  D: {n_D}")
-    print()
 
-    model, history = train_model(
-        train_loader, encoders,
-        val_loader=val_loader,
-        hidden_size=HIDDEN_SIZE, lr=LR, dropout=DROPOUT, epochs=EPOCHS,
-        n_D=n_D,
-        device=DEVICE, verbose=True,
-    )
+    model, history, config = train_model(
+        train_loader, val_loader, encoders, hidden_size=args.hidden_size,
+        lr=args.lr, dropout=args.dropout, epochs=args.epochs, device=device)
 
-    # ── Final training summary ────────────────────────────────────────────────
-    all_A, all_B, all_C, all_D, pred_A, pred_B, pred_C, pred_D = evaluate(
-        model, train_loader, DEVICE
-    )
-    bal_A  = balanced_accuracy_score(all_A, pred_A)
-    bal_B  = balanced_accuracy_score(all_B, pred_B)
-    bal_C  = balanced_accuracy_score(all_C, pred_C)
-    bal_D  = balanced_accuracy_score(all_D, pred_D)
-    f1_A   = f1_score(all_A, pred_A, average="macro", zero_division=0)
-    f1_B   = f1_score(all_B, pred_B, average="macro", zero_division=0)
-    f1_C   = f1_score(all_C, pred_C, average="macro", zero_division=0)
-    f1_D   = f1_score(all_D, pred_D, average="macro", zero_division=0)
-    kap_A  = cohen_kappa_score(all_A, pred_A)
-    kap_B  = cohen_kappa_score(all_B, pred_B)
-    kap_C  = cohen_kappa_score(all_C, pred_C)
-    kap_D  = cohen_kappa_score(all_D, pred_D)
-
-    print(f"\n{'─' * 90}")
-    print("Final Training Metrics")
-    print(f"{'─' * 90}")
-    print(f"{'Metric':<22} {'A (Sup.)':>14} {'B (Op.)':>14} {'C (Unsafe)':>14} {'D (Severity)':>18}")
-    print(f"{'─' * 90}")
-    print(f"{'Balanced Accuracy':<22} {bal_A:>14.2%} {bal_B:>14.2%} {bal_C:>14.2%} {bal_D:>18.2%}")
-    print(f"{'Macro F1':<22} {f1_A:>14.4f} {f1_B:>14.4f} {f1_C:>14.4f} {f1_D:>18.4f}")
-    print(f"{'Cohen Kappa':<22} {kap_A:>14.4f} {kap_B:>14.4f} {kap_C:>14.4f} {kap_D:>18.4f}")
-    print(f"{'─' * 90}\n")
-
-    # ── Plots ─────────────────────────────────────────────────────────────────
-    epoch_range = range(1, len(history["loss"]) + 1)
-    _, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-    ax1.plot(epoch_range, history["loss"], color="steelblue")
-    ax1.set_title("Training Loss per Epoch")
-    ax1.set_xlabel("Epoch"); ax1.set_ylabel("Loss"); ax1.grid(True)
-
-    ax2.plot(epoch_range, history["acc_A"], label="Supervisory (A)")
-    ax2.plot(epoch_range, history["acc_B"], label="Operator (B)")
-    ax2.plot(epoch_range, history["acc_C"], label="Unsafe Acts (C)")
-    ax2.plot(epoch_range, history["acc_D"], label="Severity (D)")
-    ax2.plot(epoch_range, history["acc_avg"], linestyle="--", color="black", label="Average")
-    ax2.set_title("Training Balanced Accuracy per Epoch")
-    ax2.set_xlabel("Epoch"); ax2.set_ylabel("Balanced Accuracy")
-    ax2.legend(); ax2.grid(True)
-
+    fig_dir = os.path.join(os.path.dirname(__file__), "..", "..", "figures")
+    os.makedirs(fig_dir, exist_ok=True)
+    plt.figure(figsize=(8, 5))
+    plt.plot(history["loss"], label="train")
+    plt.plot(history["val_loss"], label="val")
+    plt.xlabel("epoch"); plt.ylabel("joint focal loss"); plt.legend(); plt.grid(True)
+    plt.title("HFACS Causal LSTM training")
     plt.tight_layout()
-    plot_path = os.path.join(os.path.dirname(__file__), "..", "..", "figures", "lstm_training_curves.png")
-    plt.savefig(plot_path)
-    print(f"\nPlots saved to {plot_path}")
-    plt.show()
+    plt.savefig(os.path.join(fig_dir, "lstm_training_curves.png"))
 
-    model_path = os.path.join(os.path.dirname(__file__), "hfacs_lstm.pt")
-    torch.save(model.state_dict(), model_path)
-    print(f"\nModel saved to {model_path}")
+    save_checkpoint(model, encoders, os.path.join(os.path.dirname(__file__), "hfacs_lstm.pt"), config)
 
 
 if __name__ == "__main__":

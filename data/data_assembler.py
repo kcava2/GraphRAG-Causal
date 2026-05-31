@@ -90,7 +90,7 @@ def _int_or_none(value):
 # Economic series (employment HTML + fuel PDF) → (year, month) → QoQ %
 # ---------------------------------------------------------------------------
 
-def load_employment() -> dict:
+def load_employment() -> tuple[dict, dict]:
     """
     Parse employment.xls (HTML) → {(year, month): employment_qoq_pct}.
 
@@ -120,13 +120,17 @@ def load_employment() -> dict:
     emp = pd.DataFrame(records, columns=["year", "month", "grand_total"])
     emp = emp.sort_values(["year", "month"]).reset_index(drop=True)
     emp["qoq"] = emp["grand_total"].pct_change(periods=3) * 100.0
-    return {
+    qoq_map = {
         (int(r.year), int(r.month)): (None if pd.isna(r.qoq) else float(r.qoq))
         for r in emp.itertuples()
     }
+    raw_map = {
+        (int(r.year), int(r.month)): float(r.grand_total) for r in emp.itertuples()
+    }
+    return qoq_map, raw_map
 
 
-def load_fuel() -> dict:
+def load_fuel() -> tuple[dict, dict]:
     """
     Extract the fuel table from OST_R _ BTS _ Transtats.pdf →
     {(year, month): fuel_cost_qoq_pct}.
@@ -162,35 +166,38 @@ def load_fuel() -> dict:
     fuel = fuel.drop_duplicates(["year", "month"])
     fuel = fuel.sort_values(["year", "month"]).reset_index(drop=True)
     fuel["qoq"] = fuel["cpg"].pct_change(periods=3) * 100.0
-    return {
+    qoq_map = {
         (int(r.year), int(r.month)): (None if pd.isna(r.qoq) else float(r.qoq))
         for r in fuel.itertuples()
     }
+    raw_map = {
+        (int(r.year), int(r.month)): float(r.cpg) for r in fuel.itertuples()
+    }
+    return qoq_map, raw_map
 
 
-def attach_economics(df: pd.DataFrame, emp_map: dict, fuel_map: dict) -> pd.DataFrame:
+def attach_economics(df: pd.DataFrame, emp_qoq: dict, emp_raw: dict,
+                     fuel_qoq: dict, fuel_raw: dict) -> pd.DataFrame:
     """
-    LEFT JOIN employment & fuel QoQ on integer (year, month).
+    LEFT JOIN employment & fuel on integer (year, month).
 
-    Fuel has no pre-2000 data, so unmatched rows get fuel_cost_qoq_pct = 0.0.
-    Both are then bucketed via bracket_qoq().
+    Adds QoQ % (bucketed via bracket_qoq) plus the raw level features
+    `industry_total` (employment GrandTotal) and `fuel_cost_per_gallon`
+    (Total CostPerGallon). Fuel has no pre-2000 data, so unmatched rows get
+    fuel_cost_qoq_pct = 0.0 and fuel_cost_per_gallon = 0.0.
     """
     pairs = list(zip(df["year"], df["month"]))
 
-    def _emp(y, m):
+    def _lookup(table, y, m, default):
         if pd.isna(y) or pd.isna(m):
-            return np.nan
-        v = emp_map.get((int(y), int(m)))
-        return np.nan if v is None else v
+            return default
+        v = table.get((int(y), int(m)))
+        return default if v is None else v
 
-    def _fuel(y, m):
-        if pd.isna(y) or pd.isna(m):
-            return 0.0
-        v = fuel_map.get((int(y), int(m)))
-        return 0.0 if v is None else v
-
-    df["employment_qoq_pct"] = [_emp(y, m) for y, m in pairs]
-    df["fuel_cost_qoq_pct"] = [_fuel(y, m) for y, m in pairs]
+    df["employment_qoq_pct"] = [_lookup(emp_qoq, y, m, np.nan) for y, m in pairs]
+    df["fuel_cost_qoq_pct"] = [_lookup(fuel_qoq, y, m, 0.0) for y, m in pairs]
+    df["industry_total"] = [_lookup(emp_raw, y, m, np.nan) for y, m in pairs]
+    df["fuel_cost_per_gallon"] = [_lookup(fuel_raw, y, m, 0.0) for y, m in pairs]
     df["employment_bracket"] = df["employment_qoq_pct"].apply(bracket_qoq)
     df["fuel_bracket"] = df["fuel_cost_qoq_pct"].apply(bracket_qoq)
     return df
@@ -238,11 +245,12 @@ NTSB_COLUMNS = [
     "acft_make", "acft_model", "crew_age_mean",
     "finding_description_agg", "occurrence_description_agg",
     "employment_qoq_pct", "fuel_cost_qoq_pct",
+    "industry_total", "fuel_cost_per_gallon",
     "employment_bracket", "fuel_bracket",
 ]
 
 
-def build_ntsb_clean(emp_map: dict, fuel_map: dict) -> pd.DataFrame:
+def build_ntsb_clean(emp_qoq: dict, emp_raw: dict, fuel_qoq: dict, fuel_raw: dict) -> pd.DataFrame:
     """NTSB training corpus — one row per ev_id after crew-level aggregation."""
     df = pd.read_csv(NTSB_CSV, encoding="latin-1", dtype=str)
 
@@ -297,7 +305,7 @@ def build_ntsb_clean(emp_map: dict, fuel_map: dict) -> pd.DataFrame:
     base["acft_model"] = base[M + "acft_model"].apply(_s)
 
     base = base.reset_index()
-    base = attach_economics(base, emp_map, fuel_map)
+    base = attach_economics(base, emp_qoq, emp_raw, fuel_qoq, fuel_raw)
     return base[NTSB_COLUMNS]
 
 
@@ -357,7 +365,7 @@ def _read_asias_narratives() -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True).drop_duplicates("c5")
 
 
-def build_asias_clean(emp_map: dict, fuel_map: dict) -> pd.DataFrame:
+def build_asias_clean(emp_qoq: dict, emp_raw: dict, fuel_qoq: dict, fuel_raw: dict) -> pd.DataFrame:
     """ASIAS Scheduled-Air-Carrier records for the KG / RAG (never LSTM)."""
     df = _read_asias_structured()
     # Scheduled-Air-Carrier / Part 121-125 selection. c101 (purpose-of-flight)
@@ -399,7 +407,7 @@ def build_asias_clean(emp_map: dict, fuel_map: dict) -> pd.DataFrame:
                 "model", "local_time"):
         df[col] = df[col].apply(_s)
 
-    df = attach_economics(df, emp_map, fuel_map)
+    df = attach_economics(df, emp_qoq, emp_raw, fuel_qoq, fuel_raw)
     return df[ASIAS_COLUMNS]
 
 
@@ -460,7 +468,7 @@ def _find_col(columns, group: str, sub: str):
     return None
 
 
-def build_asrs_clean(emp_map: dict, fuel_map: dict) -> pd.DataFrame:
+def build_asrs_clean(emp_qoq: dict, emp_raw: dict, fuel_qoq: dict, fuel_raw: dict) -> pd.DataFrame:
     """ASRS FAR 121/125 reports for the KG / RAG (never LSTM)."""
     frames = []
     for path in sorted(glob.glob(os.path.join(RAW, "ASRS_DBOnline_*.csv")),
@@ -503,7 +511,7 @@ def build_asrs_clean(emp_map: dict, fuel_map: dict) -> pd.DataFrame:
     for col in ("acn", "far_part", "primary_problem", "narrative", "synopsis"):
         df[col] = df[col].apply(_s)
 
-    df = attach_economics(df, emp_map, fuel_map)
+    df = attach_economics(df, emp_qoq, emp_raw, fuel_qoq, fuel_raw)
     return df[ASRS_COLUMNS]
 
 
@@ -522,22 +530,22 @@ def _summary(name, df, extra_cols=()):
 
 def main():
     print("Loading economic series …")
-    emp_map = load_employment()
-    fuel_map = load_fuel()
-    print(f"  employment months: {len(emp_map)} | fuel months: {len(fuel_map)}")
+    emp_qoq, emp_raw = load_employment()
+    fuel_qoq, fuel_raw = load_fuel()
+    print(f"  employment months: {len(emp_qoq)} | fuel months: {len(fuel_qoq)}")
 
     print("\nBuilding ntsb_clean.csv …")
-    ntsb = build_ntsb_clean(emp_map, fuel_map)
+    ntsb = build_ntsb_clean(emp_qoq, emp_raw, fuel_qoq, fuel_raw)
     ntsb.to_csv(os.path.join(OUT, "ntsb_clean.csv"), index=False)
     _summary("ntsb_clean", ntsb)
 
     print("\nBuilding asias_clean.csv …")
-    asias = build_asias_clean(emp_map, fuel_map)
+    asias = build_asias_clean(emp_qoq, emp_raw, fuel_qoq, fuel_raw)
     asias.to_csv(os.path.join(OUT, "asias_clean.csv"), index=False)
     _summary("asias_clean", asias)
 
     print("\nBuilding asrs_clean.csv …")
-    asrs = build_asrs_clean(emp_map, fuel_map)
+    asrs = build_asrs_clean(emp_qoq, emp_raw, fuel_qoq, fuel_raw)
     asrs.to_csv(os.path.join(OUT, "asrs_clean.csv"), index=False)
     _summary("asrs_clean", asrs, extra_cols=("far_part",))
 

@@ -1,8 +1,12 @@
 """
 HFACS LLM Text-Mining Extractor (Stage 2)
 =========================================
-Reads the NTSB **training split** of ``data/ntsb_clean.csv`` (Stage 1 output)
-and, for every record, makes two deterministic local-Ollama (Gemma) calls:
+Reads ``data/ntsb_clean.csv`` (Stage 1 output) and, for every record, makes two
+deterministic local-Ollama (Gemma) calls. By default ``--split all`` processes
+**every** NTSB record so Stage 4 has HFACS targets (y_A/y_B/y_C) for the train,
+val, and test splits; ``--split train`` restricts processing to the training
+split. Either way the few-shot index/retrieval (``ntsb.faiss``) is **train-only**,
+so labeling val/test records never leaks val/test examples into a prompt.
 
     Task 1  entity + HFACS classification  -> {entities, hfacs_classifications}
     Task 2  causal relationship extraction -> {relationships}
@@ -52,8 +56,8 @@ RESULTS_CSV = os.path.join(_HERE, "hfacs_results.csv")
 FAISS_INDEX = os.path.join(_HERE, "ntsb.faiss")          # built in Stage 4
 FAISS_IDMAP = os.path.join(_HERE, "ntsb_faiss_ids.json")  # sidecar (Stage 4)
 
-DEFAULT_MODEL = "gemma4"        # gemma4:latest (8B, Q4_K_M) — pulled locally
-FALLBACK_MODEL = "gemma2"
+DEFAULT_MODEL = "qwen2.5:7b"    # gemma4 (9.6 GB) OOMs on 16 GB; this is the best
+FALLBACK_MODEL = "llama3.1:8b"  # installed model that fits. Override with --model.
 SBERT_MODEL = "all-MiniLM-L6-v2"
 CHECKPOINT_EVERY = 10           # default; override with --checkpoint-every
 
@@ -528,6 +532,12 @@ def main():
     parser.add_argument("--checkpoint-every", type=int, default=CHECKPOINT_EVERY,
                         help="Save to disk every N records (smaller = less "
                              "re-work if interrupted).")
+    parser.add_argument("--split", choices=["all", "train"], default="all",
+                        help="Which NTSB records to PROCESS. 'all' (default) "
+                             "labels every record so Stage 4 has y_A/y_B/y_C for "
+                             "all splits; 'train' restricts to the training "
+                             "split. Few-shot retrieval (ntsb.faiss) is ALWAYS "
+                             "train-only either way, so there is no leakage.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO,
@@ -539,9 +549,14 @@ def main():
                  model_name, args.num_ctx, args.sleep)
 
     df = pd.read_csv(args.input, dtype=str)
-    train_ids = ntsb_train_ids(df)
-    df = df[df["ev_id"].astype(str).isin(train_ids)].reset_index(drop=True)
-    logging.info("NTSB training-split records: %d", len(df))
+    if args.split == "train":
+        train_ids = ntsb_train_ids(df)
+        df = df[df["ev_id"].astype(str).isin(train_ids)].reset_index(drop=True)
+        logging.info("NTSB training-split records: %d", len(df))
+    else:
+        df = df.reset_index(drop=True)
+        logging.info("NTSB records (all splits): %d "
+                     "(few-shot index stays train-only — no leakage)", len(df))
 
     # Seed few-shot snippet cache from the narratives we may process.
     for _, r in df.iterrows():
