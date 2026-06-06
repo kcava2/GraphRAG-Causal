@@ -15,10 +15,10 @@ both indexes are intended to be read-only.
 Graph shape
 -----------
     (EventNode {event_id, source})            one per ASIAS/ASRS record
-      -[:HAS_FACTOR]->   (HFACSFactorNode {tier, value})          shared
-      -[:HAS_CONTEXT]->  (EnvironmentalContextNode {feature,value})  shared
-                         (PersonnelContextNode {feature,value})       shared
-                         (OrganizationalContextNode {feature,value_bracket})
+      -[:HAS_FACTOR]->          (HFACSFactorNode {tier, value})          shared
+      -[:HAS_ENV_CONTEXT]->     (EnvironmentalContextNode {feature,value})  shared
+      -[:HAS_PERSONNEL_CONTEXT]->(PersonnelContextNode {feature,value})     shared
+      -[:HAS_ORG_CONTEXT]->     (OrganizationalContextNode {feature,value_bracket})
 
     (HFACSFactorNode)-[:LEADS_TO {weight,evidence}]->(HFACSFactorNode)
     (HFACSFactorNode)-[:CO_OCCURS_WITH {weight,evidence}]-(HFACSFactorNode)
@@ -55,6 +55,14 @@ from hfacs_extractor import (  # noqa: E402
 )
 
 import json  # noqa: E402  (after the package import block, mirrors extractor style)
+
+# EventNode -> context-node edge type, by context label. Granular types let the
+# Stage-5 retriever's Task-3 Cypher target them directly (HAS_ENV_CONTEXT, ...).
+CONTEXT_EDGE = {
+    "EnvironmentalContextNode": "HAS_ENV_CONTEXT",
+    "PersonnelContextNode": "HAS_PERSONNEL_CONTEXT",
+    "OrganizationalContextNode": "HAS_ORG_CONTEXT",
+}
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ASIAS_CSV = os.path.join(_HERE, "asias_clean.csv")
@@ -339,13 +347,14 @@ class KGWriter:
         )
 
     def connect_event_context(self, event_id, source, label, keys):
+        edge = CONTEXT_EDGE[label]
         self.stats[label] += 1
-        self.stats["HAS_CONTEXT"] += 1
+        self.stats[edge] += 1
         keystr = ", ".join(f"{k}:${k}" for k in keys)
         self._run(
             f"MATCH (e:EventNode {{event_id:$id, source:$src}}) "
             f"MERGE (c:{label} {{{keystr}}}) "
-            f"MERGE (e)-[:HAS_CONTEXT]->(c)",
+            f"MERGE (e)-[:{edge}]->(c)",
             id=event_id, src=source, **keys,
         )
 
@@ -544,7 +553,8 @@ def main():
         print("\n--- KG build tally (merge ops; MERGE dedups in the DB) ---")
         for k in ("EventNode", "HFACSFactorNode", "EnvironmentalContextNode",
                   "PersonnelContextNode", "OrganizationalContextNode",
-                  "HAS_FACTOR", "HAS_CONTEXT", "LEADS_TO", "CO_OCCURS_WITH"):
+                  "HAS_FACTOR", "HAS_ENV_CONTEXT", "HAS_PERSONNEL_CONTEXT",
+                  "HAS_ORG_CONTEXT", "LEADS_TO", "CO_OCCURS_WITH"):
             print(f"  {k:<26} {writer.stats.get(k, 0)}")
         if args.dry_run:
             print("\n(--dry-run: no data written to Neo4j)")

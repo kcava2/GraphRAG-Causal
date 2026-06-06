@@ -290,13 +290,14 @@ def save_checkpoint(model, encoders, path, config):
 # Main
 # ---------------------------------------------------------------------------
 
-def _build_retriever(strategy):
+def _build_retriever(strategy, model=None):
     """Construct a Stage-5 RAG retriever if available; None otherwise (C1)."""
     if not strategy:
         return None
     try:
         from data.rag_retriever import build_retriever  # Stage 5
-        return build_retriever(strategy=strategy)
+        kw = {"model": model} if model else {}
+        return build_retriever(strategy=strategy, **kw)
     except Exception as e:
         print(f"WARNING: RAG retriever unavailable ({e}); falling back to no-RAG.")
         return None
@@ -311,13 +312,17 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Use only the first N records (smoke-test subset).")
+    parser.add_argument("--model", default=None,
+                        help="Ollama model for the RAG retriever's Cypher (C2-C4).")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    retriever = _build_retriever(args.rag_strategy)
+    retriever = _build_retriever(args.rag_strategy, args.model)
 
     train_loader, val_loader, test_loader, encoders = get_dataloaders(
-        batch_size=args.batch_size, retriever=retriever)
+        batch_size=args.batch_size, retriever=retriever, limit=args.limit)
 
     print("=" * 60)
     print(f"Condition: {'C4 (RAG ' + args.rag_strategy + ')' if retriever else 'C1 (no RAG)'}")

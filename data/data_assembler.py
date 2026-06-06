@@ -20,11 +20,15 @@ month versus the same value three months earlier.
 import glob
 import os
 import re
+import sys
 
 import numpy as np
 import pandas as pd
 from bs4 import BeautifulSoup
 
+# Allow the sibling `standardize` import whether run as a script or imported as
+# data.data_assembler.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from standardize import (
     standardize_visual_condition,
     standardize_light_condition,

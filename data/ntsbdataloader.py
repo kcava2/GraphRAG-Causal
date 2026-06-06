@@ -235,7 +235,7 @@ class NTSBSequenceDataset(Dataset):
 
         # ---- optional RAG priors appended at the END ----
         if retriever is not None:
-            org_p, sup_p, pre_p = self._retrieve_priors(retriever, df)
+            org_p, sup_p, pre_p = self._retrieve_priors(retriever, df, e)
             step_o = np.concatenate([step_o, org_p], axis=1).astype("float32")
             step_a = np.concatenate([step_a, sup_p], axis=1).astype("float32")
             step_b = np.concatenate([step_b, pre_p], axis=1).astype("float32")
@@ -244,18 +244,24 @@ class NTSBSequenceDataset(Dataset):
         self.step_a = torch.tensor(step_a, dtype=torch.float32)
         self.step_b = torch.tensor(step_b, dtype=torch.float32)
 
-    def _retrieve_priors(self, retriever, df):
+    # Columns the Stage-5 retriever needs (narrative + Cypher structural params).
+    _RETRIEVE_COLS = ["combined_text", "visual_condition", "light_conditions",
+                      "employment_bracket", "fuel_bracket", "person_involved",
+                      "pilot_hours_bracket"]
+
+    def _retrieve_priors(self, retriever, df, encoders):
         """RAG priors over O (n_O), A (n_A), B (n_B); uniform on any failure."""
         n = len(df)
         org = np.full((n, N_O), 1.0 / N_O, dtype="float32")
         sup = np.full((n, N_A), 1.0 / N_A, dtype="float32")
         pre = np.full((n, N_B), 1.0 / N_B, dtype="float32")
-        for i, text in enumerate(df["combined_text"].astype(str)):
+        records = df[self._RETRIEVE_COLS].astype(str).to_dict("records")
+        for i, rec in enumerate(records):
             try:
-                p = retriever.get_priors(text)
-                for key, arr, exp in (("organizational", org, N_O),
-                                      ("supervisory", sup, N_A),
-                                      ("precondition", pre, N_B)):
+                p = retriever.retrieve(rec, encoders)
+                for key, arr, exp in (("organizational_prior", org, N_O),
+                                      ("supervisory_prior", sup, N_A),
+                                      ("precondition_prior", pre, N_B)):
                     v = np.asarray(p.get(key), dtype="float32")
                     if v.shape == (exp,):
                         arr[i] = v
@@ -302,7 +308,8 @@ def _build_ntsb_faiss(df_train: pd.DataFrame):
 # ---------------------------------------------------------------------------
 
 def get_dataloaders(filepath: str = NTSB_CLEAN, test_split=0.2, val_split=0.1,
-                    batch_size=32, seed=42, retriever=None, build_faiss=True):
+                    batch_size=32, seed=42, retriever=None, build_faiss=True,
+                    limit=None):
     """
     Returns (train_loader, val_loader, test_loader, encoders).
 
@@ -312,6 +319,8 @@ def get_dataloaders(filepath: str = NTSB_CLEAN, test_split=0.2, val_split=0.1,
     clean, prior-free baseline.
     """
     df = load_and_join(filepath)
+    if limit:                                    # smoke-test subset
+        df = df.head(limit).reset_index(drop=True)
     n = len(df)
 
     rng = torch.Generator().manual_seed(seed)
