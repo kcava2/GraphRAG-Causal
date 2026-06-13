@@ -304,8 +304,29 @@ def _build_ntsb_faiss(df_train: pd.DataFrame):
 
 
 # ---------------------------------------------------------------------------
-# get_dataloaders
+# Split + get_dataloaders
 # ---------------------------------------------------------------------------
+
+def _split(df, seed=42, test_split=0.2, val_split=0.1):
+    """70/10/10 split via seeded torch.randperm. Single source of truth."""
+    n = len(df)
+    rng = torch.Generator().manual_seed(seed)
+    perm = torch.randperm(n, generator=rng).tolist()
+    n_test, n_val = int(n * test_split), int(n * val_split)
+    n_train = n - n_test - n_val
+    return (df.iloc[perm[:n_train]].reset_index(drop=True),
+            df.iloc[perm[n_train:n_train + n_val]].reset_index(drop=True),
+            df.iloc[perm[n_train + n_val:]].reset_index(drop=True))
+
+
+def build_faiss_only(filepath=NTSB_CLEAN, seed=42, test_split=0.2, val_split=0.1):
+    """Build ntsb.faiss + ntsb_faiss_ids.json from the train split only — run
+    BEFORE Stage-2 extraction so few-shot retrieval can fire. No training."""
+    df = load_and_join(filepath)
+    df_train, _, _ = _split(df, seed, test_split, val_split)
+    print(f"Building ntsb.faiss from {len(df_train)} train records of {filepath}")
+    _build_ntsb_faiss(df_train)
+
 
 def get_dataloaders(filepath: str = NTSB_CLEAN, test_split=0.2, val_split=0.1,
                     batch_size=32, seed=42, retriever=None, build_faiss=True,
@@ -321,17 +342,7 @@ def get_dataloaders(filepath: str = NTSB_CLEAN, test_split=0.2, val_split=0.1,
     df = load_and_join(filepath)
     if limit:                                    # smoke-test subset
         df = df.head(limit).reset_index(drop=True)
-    n = len(df)
-
-    rng = torch.Generator().manual_seed(seed)
-    perm = torch.randperm(n, generator=rng).tolist()
-    n_test = int(n * test_split)
-    n_val = int(n * val_split)
-    n_train = n - n_test - n_val
-
-    df_train = df.iloc[perm[:n_train]].reset_index(drop=True)
-    df_val = df.iloc[perm[n_train:n_train + n_val]].reset_index(drop=True)
-    df_test = df.iloc[perm[n_train + n_val:]].reset_index(drop=True)
+    df_train, df_val, df_test = _split(df, seed, test_split, val_split)
 
     encoders = NTSBEncoders(df_train)
     if build_faiss:
@@ -347,9 +358,25 @@ def get_dataloaders(filepath: str = NTSB_CLEAN, test_split=0.2, val_split=0.1,
     return train_loader, val_loader, test_loader, encoders
 
 
-if __name__ == "__main__":
-    tr, va, te, enc = get_dataloaders(build_faiss=False)
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="NTSB dataloader / FAISS index builder")
+    ap.add_argument("--build-faiss-only", action="store_true",
+                    help="Build ntsb.faiss from the train split of --input and exit "
+                         "(run before Stage-2 extraction so few-shot can fire).")
+    ap.add_argument("--input", default=NTSB_CLEAN)
+    args = ap.parse_args()
+
+    if args.build_faiss_only:
+        build_faiss_only(args.input)
+        return
+
+    tr, va, te, enc = get_dataloaders(filepath=args.input, build_faiss=False)
     s_o, s_a, s_b, yO, yA, yB, yC, yD = next(iter(tr))
     print("step_o:", s_o.shape, "step_a:", s_a.shape, "step_b:", s_b.shape)
     print("y_O/y_A/y_B/y_C/y_D:", yO.shape, yA.shape, yB.shape, yC.shape, yD.shape)
     print("n_O/n_A/n_B/n_C/n_severity:", enc.n_O, enc.n_A, enc.n_B, enc.n_C, enc.n_severity)
+
+
+if __name__ == "__main__":
+    main()

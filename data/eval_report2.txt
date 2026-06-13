@@ -1,0 +1,136 @@
+﻿
+==============================================================================
+SYSTEM EVALUATION — 3 records | model={'hidden_size': 32, 'n_O': 12, 'n_A': 4, 'n_B': 30, 'n_C': 19, 'n_D': 4, 'step_o_dim': 19, 'step_a_dim': 16, 'step_b_dim': 40, 'dropout': 0.1} | RAG=on
+==============================================================================
+
+==============================================================================
+RECORD 1: ev_id=20080107X00026  severity_class(true)=3
+  features: visual=VMC light=Daylight person=PIC hours=<500 emp=stable fuel=strong_growth
+  narrative: On January 1, 2008, about 1430 Pacific standard time, a Piper PA 28-180 low-wing airplane, N8037W, and a Barnard/Stancil Glastar high-wing airplane, N15EX, collided in flight at the Sonoma County Airp...
+
+  [1] HFACS extraction (multi-label truth from hfacs_results.csv):
+      O org     : ['(none)']
+      A sup     : ['(none)']
+      B pre     : ['Distraction', 'Mental Fatigue', 'Misinterpretation of Traffic Calls']
+      C unsafe  : ['(none)']
+
+  [2] Few-shot block: 1038 chars
+      NARRATIVE: On January 1, 2008, about 1430 Pacific standard time, a Piper PA 28-180 low-wing airplane, N8037W, and a Barnard/Stancil Glastar high-wing airplane, N15EX, collided in flight at the Sonoma County Airport (OQ3), Schellville/Sonoma ...
+
+  [3] RAG retrieval — most similar ASIAS/ASRS accidents (FAISS):
+      ASIAS 20000121040559I (sim=0.34) factors=['Channelized Attention', 'Mental Fatigue', 'Failed to Communicate']
+          (.4) ON JANUARY 21, 2000, AT 0558 CENTRAL STANDARD TIME, THERE WAS A NEAR COLLISION BETWEEN A TAXING BRITISH AEROSP
+
+(.4) ON JANUARY 21, 200...
+      ASIAS 20000110000939I (sim=0.30) factors=['Poor Technique', 'Improper Procedure', 'Distraction', 'Misplaced Motivation']
+          (-23) ON JANUARY 4, 2000, AT APPROXIMATELY 2010 HRS LOCAL TIME THE RIGHT WING OF THIS AIRCRAFT WAS DAMAGED WHEN THE
+
+(-23) ON JANUARY 4, 200...
+      ASIAS 20000131000109I (sim=0.30) factors=['Inadequate Supervision']
+          (-23) AIRCRAFT MARSHALLED TO TERMINAL AND STRUCK TERMINAL BLDG. WITH A WING TIP.  AILERON REPLACED.  NDT SHOWS NO S
+
+(-23) AIRCRAFT MARSHALL...
+
+  [4] RAG priors (appended to LSTM input):
+      org top: [('Schedules', 0.083), ('Risk Management', 0.083), ('Safety Programs', 0.083)]
+      sup top: [('Inadequate Supervision', 1.0), ('Supervisory Violations', 0.0), ('Failed to Correct Known Problem', 0.0)]
+      pre top: [('Channelized Attention', 0.23), ('Failed to Communicate', 0.229), ('Physical Fatigue', 0.229)]
+
+  [5] LSTM predicted causal chain (probabilities):
+      O Organizational: [('Schedules', 0.64), ('Culture', 0.56), ('Procedures', 0.54)]
+      A Supervisory   : [('Failed to Correct Known Problem', 0.55), ('Inadequate Supervision', 0.52), ('Planned Inappropriate Ops', 0.52)]
+      B Preconditions : [('Misinterpretation of Traffic Calls', 0.56), ('Incompatible Intelligence/Aptitude', 0.55), ('Mental Fatigue', 0.54)]
+      C Unsafe Acts   : [('Violated Training Rules', 0.56), ('Breakdown in Visual Scan', 0.54), ('Inappropriate Maneuver', 0.54)]
+      D Severity      : class 1 (probs [0.20999999344348907, 0.30000001192092896, 0.2199999988079071, 0.27000001072883606])
+
+  [6] agreement (Jaccard pred>0.5 vs true): O=0.00 A=0.00 B=0.11 C=0.00 | severity_hit=0
+
+==============================================================================
+RECORD 2: ev_id=20080107X00027  severity_class(true)=4
+  features: visual=VMC light=Night person=PIC hours=<500 emp=stable fuel=strong_growth
+  narrative: On January 3, 2008, approximately 0225 central standard time, a Pilatus PC-12/45, N398J, a single-engine turbo-prop airplane, was not damaged when a line technician was struck and killed by its moving...
+
+  [1] HFACS extraction (multi-label truth from hfacs_results.csv):
+      O org     : ['(none)']
+      A sup     : ['(none)']
+      B pre     : ['Distraction', 'Haste']
+      C unsafe  : ['Failed to Prioritize Attention']
+
+  [2] Few-shot block: 1103 chars
+      NARRATIVE: On January 3, 2008, approximately 0225 central standard time, a Pilatus PC-12/45, N398J, a single-engine turbo-prop airplane, was not damaged when a line technician was struck and killed by its moving propeller while parked at th ...
+
+  [3] RAG retrieval — most similar ASIAS/ASRS accidents (FAISS):
+      ASIAS 20000121040559I (sim=0.31) factors=['Channelized Attention', 'Mental Fatigue', 'Failed to Communicate']
+          (.4) ON JANUARY 21, 2000, AT 0558 CENTRAL STANDARD TIME, THERE WAS A NEAR COLLISION BETWEEN A TAXING BRITISH AEROSP
+
+(.4) ON JANUARY 21, 200...
+      ASIAS 20000121000639I (sim=0.29) factors=['Misdiagnosed Emergency', 'Distraction', 'Mental Fatigue']
+          (-23) ON JANUARY 21, 2000, AT 0717E, N15730, EMB-120-ER, S/N 120-187, OPERATING AS CONTINENTAL EXPRESS FLIGHT 3171,
+
+(-23) ON JANUARY 21, 20...
+      ASIAS 20000124003419I (sim=0.28) factors=['Physical Fatigue', 'Poor Technique', 'Inadvertent Flight Control Use', 'Over-controlled Aircraft']
+          A NOTHWEST AIRLINES (NWA) B-747-400 WAS REPOSITIONING INTO GATE F-14. NWA PROCEDURES ARE TO TAXI AIRCRAFT UNDER ITS
+
+A NOTHWEST AIRLINES (NW...
+
+  [4] RAG priors (appended to LSTM input):
+      org top: [('Schedules', 0.083), ('Risk Management', 0.083), ('Safety Programs', 0.083)]
+      sup top: [('Failed to Correct Known Problem', 1.0), ('Supervisory Violations', 0.0), ('Planned Inappropriate Ops', 0.0)]
+      pre top: [('Mental Fatigue', 0.29), ('Physical Fatigue', 0.247), ('Failed to Communicate', 0.173)]
+
+  [5] LSTM predicted causal chain (probabilities):
+      O Organizational: [('Schedules', 0.64), ('Culture', 0.56), ('Procedures', 0.54)]
+      A Supervisory   : [('Failed to Correct Known Problem', 0.55), ('Inadequate Supervision', 0.52), ('Planned Inappropriate Ops', 0.52)]
+      B Preconditions : [('Misinterpretation of Traffic Calls', 0.56), ('Incompatible Intelligence/Aptitude', 0.55), ('Lighting', 0.54)]
+      C Unsafe Acts   : [('Violated Training Rules', 0.56), ('Breakdown in Visual Scan', 0.55), ('Inappropriate Maneuver', 0.54)]
+      D Severity      : class 1 (probs [0.20000000298023224, 0.3100000023841858, 0.2199999988079071, 0.25999999046325684])
+
+  [6] agreement (Jaccard pred>0.5 vs true): O=0.00 A=0.00 B=0.05 C=0.00 | severity_hit=0
+
+==============================================================================
+RECORD 3: ev_id=20080109X00036  severity_class(true)=2
+  features: visual=VMC light=Daylight person=PIC hours=<500 emp=stable fuel=strong_growth
+  narrative: The private pilot was conducting a touch-and-go in a tailwheel equipped airplane with a direct crosswind component of 15 knots gusting up to 20 knots from the left side of the airplane.  During landin...
+
+  [1] HFACS extraction (multi-label truth from hfacs_results.csv):
+      O org     : ['(none)']
+      A sup     : ['(none)']
+      B pre     : ['Channelized Attention', 'Distraction']
+      C unsafe  : ['Misdiagnosed Emergency']
+
+  [2] Few-shot block: 1131 chars
+      NARRATIVE: During landing on runway 34, a 3,313 foot-long and 75-foot wide asphalt runway, the pilot of the Beech A36 airplane encountered a wind gust, which he estimated to be about 40 knots.  The airplane then bounced on the runway and th ...
+
+  [3] RAG retrieval — most similar ASIAS/ASRS accidents (FAISS):
+      ASIAS 20000128000929I (sim=0.33) factors=['Improper Procedure', 'Distraction', 'Mental Fatigue']
+          (-23) THE AIRCRAFT LANDED ON THE CENTERLINE OF RUNWAY 4R AT NEWARK.  SHORTLY AFTER TOUCHDOWN, THE AIRCRAFT VEERED L
+
+(-23) THE AIRCRAFT LAND...
+      ASIAS 20000106002589I (sim=0.28) factors=['Channelized Attention', 'Distraction']
+          THIS INCIDNET OCCURED DURING A POWER BACK DEPARTURE FROM GATE 33A AT DFW. GUIDEMAN BRIEFED CAPT THAT A TAIL LEFT WO
+
+THIS INCIDNET OCCURED D...
+      ASIAS 20000123000319I (sim=0.27) factors=['Distraction', 'Mental Fatigue', 'Omitted Checklist Step']
+          (-23) DURING DEICING, AIRCRAFT MOVED FORWARD AND STRUCK SPRAY TRUCK BOOM CAUSING DAMAGE TO RIGHT WING TIP AND POSIT
+
+(-23) DURING DEICING, A...
+
+  [4] RAG priors (appended to LSTM input):
+      org top: [('Schedules', 0.083), ('Risk Management', 0.083), ('Safety Programs', 0.083)]
+      sup top: [('Inadequate Supervision', 1.0), ('Supervisory Violations', 0.0), ('Failed to Correct Known Problem', 0.0)]
+      pre top: [('Distraction', 0.391), ('Mental Fatigue', 0.299), ('Physical Fatigue', 0.218)]
+
+  [5] LSTM predicted causal chain (probabilities):
+      O Organizational: [('Schedules', 0.64), ('Culture', 0.56), ('Procedures', 0.54)]
+      A Supervisory   : [('Failed to Correct Known Problem', 0.55), ('Inadequate Supervision', 0.52), ('Planned Inappropriate Ops', 0.52)]
+      B Preconditions : [('Misinterpretation of Traffic Calls', 0.56), ('Incompatible Intelligence/Aptitude', 0.55), ('Mental Fatigue', 0.54)]
+      C Unsafe Acts   : [('Violated Training Rules', 0.56), ('Breakdown in Visual Scan', 0.54), ('Inappropriate Maneuver', 0.54)]
+      D Severity      : class 1 (probs [0.20999999344348907, 0.30000001192092896, 0.2199999988079071, 0.27000001072883606])
+
+  [6] agreement (Jaccard pred>0.5 vs true): O=0.00 A=0.00 B=0.05 C=0.11 | severity_hit=0
+
+==============================================================================
+AGGREGATE over 3 records (mean):
+  Jaccard  O=0.00 A=0.00 B=0.07 C=0.04 | severity_acc=0.00
+  NOTE: values reflect the smoke-trained model; this tool is for inspection, not Stage-6 metrics.
+==============================================================================

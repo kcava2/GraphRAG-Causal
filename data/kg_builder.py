@@ -445,8 +445,8 @@ def process_record(writer: KGWriter, model_name: str, source: str, row: pd.Serie
 
 
 def build_kg(writer: KGWriter, model_name: str, source: str,
-             limit=None, sleep=0.0):
-    path = ASIAS_CSV if source == "ASIAS" else ASRS_CSV
+             limit=None, sleep=0.0, path=None):
+    path = path or (ASIAS_CSV if source == "ASIAS" else ASRS_CSV)
     df = pd.read_csv(path, dtype=str)
     if limit:
         df = df.head(limit)
@@ -473,12 +473,12 @@ def _faiss_text(row: pd.Series, source: str) -> str:
     )
 
 
-def build_faiss(writer: KGWriter, source: str, limit=None):
+def build_faiss(writer: KGWriter, source: str, limit=None, path=None):
     import faiss
     import numpy as np
     from sentence_transformers import SentenceTransformer
 
-    path = ASIAS_CSV if source == "ASIAS" else ASRS_CSV
+    path = path or (ASIAS_CSV if source == "ASIAS" else ASRS_CSV)
     df = pd.read_csv(path, dtype=str)
     if limit:
         df = df.head(limit)
@@ -521,6 +521,13 @@ def main():
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--sleep", type=float, default=0.0)
     parser.add_argument("--num-ctx", type=int, default=8192)
+    parser.add_argument("--num-predict", type=int, default=None,
+                        help="Cap generation length (Ollama num_predict) to bound "
+                             "slow outliers; ~512 is safe for the bounded JSON.")
+    parser.add_argument("--asias-csv", default=None,
+                        help="Override ASIAS input CSV (e.g. data/asias_subset.csv).")
+    parser.add_argument("--asrs-csv", default=None,
+                        help="Override ASRS input CSV (e.g. data/asrs_subset.csv).")
     parser.add_argument("--faiss-only", action="store_true",
                         help="Skip LLM/KG; only (re)build the FAISS indexes.")
     parser.add_argument("--skip-faiss", action="store_true",
@@ -533,7 +540,10 @@ def main():
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     _GEN_OPTIONS["num_ctx"] = args.num_ctx
+    if args.num_predict is not None:
+        _GEN_OPTIONS["num_predict"] = args.num_predict
 
+    csv_for = {"ASIAS": args.asias_csv, "ASRS": args.asrs_csv}
     sources = ["ASIAS", "ASRS"] if args.source == "both" else [args.source.upper()]
     writer = KGWriter(dry_run=args.dry_run)
 
@@ -544,11 +554,12 @@ def main():
                          model_name, args.num_ctx, args.sleep, args.dry_run)
             writer.ensure_schema()
             for src in sources:
-                build_kg(writer, model_name, src, limit=args.limit, sleep=args.sleep)
+                build_kg(writer, model_name, src, limit=args.limit,
+                         sleep=args.sleep, path=csv_for[src])
 
         if not args.skip_faiss:
             for src in sources:
-                build_faiss(writer, src, limit=args.limit)
+                build_faiss(writer, src, limit=args.limit, path=csv_for[src])
 
         print("\n--- KG build tally (merge ops; MERGE dedups in the DB) ---")
         for k in ("EventNode", "HFACSFactorNode", "EnvironmentalContextNode",

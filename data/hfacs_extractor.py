@@ -486,6 +486,25 @@ def _seed_caches_from_existing(output_path: str) -> set:
     return done
 
 
+def _load_results_cache(path: str) -> int:
+    """
+    Populate the few-shot RESULTS cache from a *reference* results file (e.g. a
+    zero-shot pass-1 output) WITHOUT marking those rows as already processed.
+    Used by --fewshot-from so a RAG pass-2 can re-extract every record while
+    retrieving pass-1 labels of its (train-split) neighbours as examples.
+    """
+    if not os.path.exists(path):
+        logging.warning("--fewshot-from: %s not found — few-shot corpus empty.", path)
+        return 0
+    df = pd.read_csv(path, dtype=str)
+    n = 0
+    for _, r in df.iterrows():
+        if str(r.get("extraction_status")) == "success":
+            _RESULTS_CACHE[str(r["ev_id"])] = str(r.get("hfacs_json", "{}"))
+            n += 1
+    return n
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -538,12 +557,23 @@ def main():
                              "all splits; 'train' restricts to the training "
                              "split. Few-shot retrieval (ntsb.faiss) is ALWAYS "
                              "train-only either way, so there is no leakage.")
+    parser.add_argument("--num-predict", type=int, default=None,
+                        help="Cap generation length (Ollama num_predict). Bounds "
+                             "the occasional multi-minute outlier; Task-1/2 JSON "
+                             "is short so ~512 is safe.")
+    parser.add_argument("--fewshot-from", default=None,
+                        help="Reference results CSV (e.g. a zero-shot pass-1) to "
+                             "seed the few-shot retrieval corpus for a RAG pass-2. "
+                             "Combine with --force-binary to re-extract every "
+                             "record with retrieval active.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
 
     _GEN_OPTIONS["num_ctx"] = args.num_ctx
+    if args.num_predict is not None:
+        _GEN_OPTIONS["num_predict"] = args.num_predict
     model_name = _resolve_model(args.model)
     logging.info("Using model: %s (num_ctx=%d, sleep=%.1fs)",
                  model_name, args.num_ctx, args.sleep)
@@ -561,6 +591,14 @@ def main():
     # Seed few-shot snippet cache from the narratives we may process.
     for _, r in df.iterrows():
         _SNIPPET_CACHE[str(r["ev_id"])] = _clean(r.get("combined_text"))
+
+    # RAG pass-2: seed the few-shot retrieval corpus from a reference (pass-1)
+    # results file — independent of the output, so --force-binary re-extracts
+    # every record while retrieving pass-1 labels of its neighbours.
+    if args.fewshot_from:
+        n_ref = _load_results_cache(args.fewshot_from)
+        logging.info("Few-shot corpus from %s: %d labeled records.",
+                     args.fewshot_from, n_ref)
 
     already_done = set()
     if not args.force_binary:

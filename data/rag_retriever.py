@@ -112,10 +112,15 @@ class RAGRetriever:
     """See module docstring. Construct via build_retriever()."""
 
     def __init__(self, strategy: str = "hybrid", k: int = TOP_K,
-                 model: str = DEFAULT_MODEL):
+                 model: str = DEFAULT_MODEL,
+                 asias_weight: float = ASIAS_WEIGHT, asrs_weight: float = ASRS_WEIGHT):
         self.strategy = strategy            # 'hybrid' | 'faiss' | 'cypher'
         self.k = k
         self.model = model
+        # Per-source FAISS weights — knobs for the C5/C6 ablations (ASIAS-only,
+        # ASRS-only). Default 0.6/0.4 reflects ASIAS's closer Part-125 alignment.
+        self.asias_weight = asias_weight
+        self.asrs_weight = asrs_weight
         self._sbert = None
         self._faiss = {}                    # source -> (index, [event_id,...])
         self.driver = None
@@ -169,8 +174,8 @@ class RAGRetriever:
         model = self._ensure_sbert()
         emb = np.asarray(model.encode([text], normalize_embeddings=True), dtype="float32")
         merged = {}
-        for src, weight in (("ASIAS", ASIAS_WEIGHT), ("ASRS", ASRS_WEIGHT)):
-            if src not in self._faiss:
+        for src, weight in (("ASIAS", self.asias_weight), ("ASRS", self.asrs_weight)):
+            if src not in self._faiss or weight <= 0:
                 continue
             index, ids = self._faiss[src]
             kk = min(self.k, index.ntotal)
@@ -282,6 +287,11 @@ class RAGRetriever:
         return _fewshot(narrative_text, n=n)
 
 
-def build_retriever(strategy: str = "hybrid", **kwargs) -> RAGRetriever:
-    """Factory used by models/lstm/train.py for C2-C4."""
-    return RAGRetriever(strategy=strategy, **kwargs)
+def build_retriever(strategy: str = "hybrid", model: str = None,
+                    k: int = TOP_K, asias_weight: float = ASIAS_WEIGHT,
+                    asrs_weight: float = ASRS_WEIGHT, **kwargs) -> RAGRetriever:
+    """Factory used by models/lstm/train.py and eval.py for C2-C8."""
+    kw = dict(strategy=strategy, k=k, asias_weight=asias_weight, asrs_weight=asrs_weight)
+    if model:
+        kw["model"] = model
+    return RAGRetriever(**kw, **kwargs)

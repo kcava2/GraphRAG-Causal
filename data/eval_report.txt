@@ -1,0 +1,136 @@
+﻿
+==============================================================================
+SYSTEM EVALUATION — 3 records | model={'hidden_size': 32, 'n_O': 12, 'n_A': 4, 'n_B': 30, 'n_C': 19, 'n_D': 4, 'step_o_dim': 19, 'step_a_dim': 16, 'step_b_dim': 40, 'dropout': 0.1} | RAG=on
+==============================================================================
+
+==============================================================================
+RECORD 1: ev_id=20100805X95630  severity_class(true)=3
+  features: visual=VMC light=Daylight person=PIC hours=<500 emp=stable fuel=mild_decline
+  narrative: During landing roll, at approximately 30 knots, the airplane impacted a deer that suddenly emerged from a low-lying area located off the right side of the runway.  The right horizontal stabilizer was ...
+
+  [1] HFACS extraction (multi-label truth from hfacs_results.csv):
+      O org     : ['(none)']
+      A sup     : ['(none)']
+      B pre     : ['(none)']
+      C unsafe  : ['(none)']
+
+  [2] Few-shot block: 1131 chars
+      NARRATIVE: During landing on runway 34, a 3,313 foot-long and 75-foot wide asphalt runway, the pilot of the Beech A36 airplane encountered a wind gust, which he estimated to be about 40 knots.  The airplane then bounced on the runway and th ...
+
+  [3] RAG retrieval — most similar ASIAS/ASRS accidents (FAISS):
+      ASIAS 20000110000939I (sim=0.33) factors=['Poor Technique', 'Improper Procedure', 'Distraction', 'Misplaced Motivation']
+          (-23) ON JANUARY 4, 2000, AT APPROXIMATELY 2010 HRS LOCAL TIME THE RIGHT WING OF THIS AIRCRAFT WAS DAMAGED WHEN THE
+
+(-23) ON JANUARY 4, 200...
+      ASIAS 20000128000929I (sim=0.30) factors=['Improper Procedure', 'Distraction', 'Mental Fatigue']
+          (-23) THE AIRCRAFT LANDED ON THE CENTERLINE OF RUNWAY 4R AT NEWARK.  SHORTLY AFTER TOUCHDOWN, THE AIRCRAFT VEERED L
+
+(-23) THE AIRCRAFT LAND...
+      ASIAS 20000123000319I (sim=0.29) factors=['Distraction', 'Mental Fatigue', 'Omitted Checklist Step']
+          (-23) DURING DEICING, AIRCRAFT MOVED FORWARD AND STRUCK SPRAY TRUCK BOOM CAUSING DAMAGE TO RIGHT WING TIP AND POSIT
+
+(-23) DURING DEICING, A...
+
+  [4] RAG priors (appended to LSTM input):
+      org top: [('Schedules', 0.083), ('Risk Management', 0.083), ('Safety Programs', 0.083)]
+      sup top: [('Supervisory Violations', 0.25), ('Failed to Correct Known Problem', 0.25), ('Planned Inappropriate Ops', 0.25)]
+      pre top: [('Distraction', 0.405), ('Physical Fatigue', 0.191), ('Misplaced Motivation', 0.191)]
+
+  [5] LSTM predicted causal chain (probabilities):
+      O Organizational: [('Schedules', 0.64), ('Culture', 0.56), ('Procedures', 0.54)]
+      A Supervisory   : [('Failed to Correct Known Problem', 0.55), ('Inadequate Supervision', 0.52), ('Planned Inappropriate Ops', 0.52)]
+      B Preconditions : [('Misinterpretation of Traffic Calls', 0.56), ('Incompatible Intelligence/Aptitude', 0.55), ('Mental Fatigue', 0.54)]
+      C Unsafe Acts   : [('Violated Training Rules', 0.56), ('Breakdown in Visual Scan', 0.54), ('Inappropriate Maneuver', 0.53)]
+      D Severity      : class 1 (probs [0.20999999344348907, 0.30000001192092896, 0.2199999988079071, 0.27000001072883606])
+
+  [6] agreement (Jaccard pred>0.5 vs true): O=0.00 A=0.00 B=0.00 C=0.00 | severity_hit=0
+
+==============================================================================
+RECORD 2: ev_id=20101019X30046  severity_class(true)=4
+  features: visual=IMC light=Daylight person=PIC hours=Unknown emp=stable fuel=strong_growth
+  narrative: On October 15, 2010, at 2200 coordinated universal time (1400 local), a Beech A36, US registered N212DB, owned by Lyon Roger C Trustee and piloted by an instrument rated private pilot, was destroyed w...
+
+  [1] HFACS extraction (multi-label truth from hfacs_results.csv):
+      O org     : ['(none)']
+      A sup     : ['(none)']
+      B pre     : ['(none)']
+      C unsafe  : ['(none)']
+
+  [2] Few-shot block: 1145 chars
+      NARRATIVE: On January 19, 2008 at 0732 UTC, D2-FK, Beech 200, a charter flight, operated by Gira-globo Company, crashed in mountainous terrain near Huambo, Angola.  The airplane crashed during an approach to land at Huambo Aerodrome. Instru ...
+
+  [3] RAG retrieval — most similar ASIAS/ASRS accidents (FAISS):
+      ASIAS 20000110000939I (sim=0.28) factors=['Poor Technique', 'Improper Procedure', 'Distraction', 'Misplaced Motivation']
+          (-23) ON JANUARY 4, 2000, AT APPROXIMATELY 2010 HRS LOCAL TIME THE RIGHT WING OF THIS AIRCRAFT WAS DAMAGED WHEN THE
+
+(-23) ON JANUARY 4, 200...
+      ASIAS 20000121003159I (sim=0.28) factors=['Misdiagnosed Emergency', 'Distraction', 'Mental Fatigue', 'Task Saturation']
+          AMERICAN AIRLINES FLIGHT 159, B-757, ON FLIGHT FROM NEWARK, NJ, TO LOS ANGELES, CA, DIVERTED INTO LINCOLN, NE, DUE
+
+AMERICAN AIRLINES FLIGHT...
+      ASIAS 20000122002569I (sim=0.28) factors=['Misdiagnosed Emergency', 'Channelized Attention', 'Distraction', 'Mental Fatigue']
+          ON JANUARY 22, 2000, AT 1350E, THE B-1900-D, S/N UE-13, REGISTERED AS N132VAND OPERATED BY "AMWA" AS FLIGHT #5562.
+
+ON JANUARY 22, 2000, AT ...
+
+  [4] RAG priors (appended to LSTM input):
+      org top: [('Schedules', 0.083), ('Risk Management', 0.083), ('Safety Programs', 0.083)]
+      sup top: [('Supervisory Violations', 0.25), ('Failed to Correct Known Problem', 0.25), ('Planned Inappropriate Ops', 0.25)]
+      pre top: [('Distraction', 0.301), ('Mental Fatigue', 0.167), ('Misplaced Motivation', 0.137)]
+
+  [5] LSTM predicted causal chain (probabilities):
+      O Organizational: [('Schedules', 0.64), ('Culture', 0.56), ('Procedures', 0.54)]
+      A Supervisory   : [('Failed to Correct Known Problem', 0.55), ('Inadequate Supervision', 0.52), ('Planned Inappropriate Ops', 0.52)]
+      B Preconditions : [('Misinterpretation of Traffic Calls', 0.56), ('Incompatible Intelligence/Aptitude', 0.55), ('Failed to Communicate', 0.54)]
+      C Unsafe Acts   : [('Violated Training Rules', 0.57), ('Breakdown in Visual Scan', 0.54), ('Inappropriate Maneuver', 0.54)]
+      D Severity      : class 1 (probs [0.20999999344348907, 0.28999999165534973, 0.23000000417232513, 0.27000001072883606])
+
+  [6] agreement (Jaccard pred>0.5 vs true): O=0.00 A=0.00 B=0.00 C=0.00 | severity_hit=0
+
+==============================================================================
+RECORD 3: ev_id=20160324X71331  severity_class(true)=2
+  features: visual=VMC light=Daylight person=Other hours=<500 emp=stable fuel=strong_decline
+  narrative: The solo student pilot reported that during the landing flare the airplane ballooned, and upon touchdown the nose gear touched down first. He further reported that the airplane porpoised. Subsequently...
+
+  [1] HFACS extraction (multi-label truth from hfacs_results.csv):
+      O org     : ['(none)']
+      A sup     : ['(none)']
+      B pre     : ['(none)']
+      C unsafe  : ['(none)']
+
+  [2] Few-shot block: 647 chars
+      NARRATIVE:  CLASSIFICATION: {"operator_mental": ["Distraction", "Mental Fatigue", "Task Saturation"]}  NARRATIVE: On January 12, 2008, at 1527 eastern standard time, a Newbold 2000, N90413, an amateur-built gyrocopter, experienced a hard la ...
+
+  [3] RAG retrieval — most similar ASIAS/ASRS accidents (FAISS):
+      ASIAS 20000110000659I (sim=0.29) factors=['Misdiagnosed Emergency', 'Channelized Attention', 'Distraction']
+          (-23) AIRCRAFT DEPARTED NARITA, JAPAN ENROUTE HONOLULU, HAWAII.  PILOT INDICATED SOME TURBULENCE ENCOUNTERED DURING
+
+(-23) AIRCRAFT DEPARTED...
+      ASIAS 20000123001169I (sim=0.28) factors=['Poor Technique', 'Inadvertent Flight Control Use', 'Over-controlled Aircraft', 'Omitted Checklist Step']
+          (-23) ON SUNDAY, JANUARY 23, 2000, AT 0713 LOCAL, AN AIR TRAN AIRWAYS DC-9 RETURNED AND LANDED AT BUF ON RUNWAY 23
+
+(-23) ON SUNDAY, JANUARY...
+      ASIAS 20000129002829I (sim=0.27) factors=['Misplaced Motivation']
+          ON SATURDAY, JANUARY 29, 2000, UPOM TAKEOFF FROM THE ROCHESTER INTERNATIONAL AIRPORT (ROC), THE RIGHT HAND NOSE LAN
+
+ON SATURDAY, JANUARY 29...
+
+  [4] RAG priors (appended to LSTM input):
+      org top: [('Schedules', 0.083), ('Risk Management', 0.083), ('Safety Programs', 0.083)]
+      sup top: [('Supervisory Violations', 0.25), ('Failed to Correct Known Problem', 0.25), ('Planned Inappropriate Ops', 0.25)]
+      pre top: [('Distraction', 0.34), ('Channelized Attention', 0.239), ('Misplaced Motivation', 0.218)]
+
+  [5] LSTM predicted causal chain (probabilities):
+      O Organizational: [('Schedules', 0.64), ('Culture', 0.56), ('Procedures', 0.54)]
+      A Supervisory   : [('Failed to Correct Known Problem', 0.55), ('Inadequate Supervision', 0.52), ('Planned Inappropriate Ops', 0.52)]
+      B Preconditions : [('Misinterpretation of Traffic Calls', 0.56), ('Incompatible Intelligence/Aptitude', 0.55), ('Mental Fatigue', 0.54)]
+      C Unsafe Acts   : [('Violated Training Rules', 0.56), ('Breakdown in Visual Scan', 0.54), ('Inappropriate Maneuver', 0.54)]
+      D Severity      : class 1 (probs [0.20999999344348907, 0.30000001192092896, 0.2199999988079071, 0.27000001072883606])
+
+  [6] agreement (Jaccard pred>0.5 vs true): O=0.00 A=0.00 B=0.00 C=0.00 | severity_hit=0
+
+==============================================================================
+AGGREGATE over 3 records (mean):
+  Jaccard  O=0.00 A=0.00 B=0.00 C=0.00 | severity_acc=0.00
+  NOTE: values reflect the smoke-trained model; this tool is for inspection, not Stage-6 metrics.
+==============================================================================

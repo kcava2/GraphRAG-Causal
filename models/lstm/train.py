@@ -37,7 +37,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
-from data.ntsbdataloader import get_dataloaders, ENV_SLICE, SUP_START  # noqa: E402
+from data.ntsbdataloader import get_dataloaders, ENV_SLICE, SUP_START, NTSB_CLEAN  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -290,14 +290,15 @@ def save_checkpoint(model, encoders, path, config):
 # Main
 # ---------------------------------------------------------------------------
 
-def _build_retriever(strategy, model=None):
+def _build_retriever(strategy, model=None, asias_weight=0.6, asrs_weight=0.4, top_k=5):
     """Construct a Stage-5 RAG retriever if available; None otherwise (C1)."""
     if not strategy:
         return None
     try:
         from data.rag_retriever import build_retriever  # Stage 5
         kw = {"model": model} if model else {}
-        return build_retriever(strategy=strategy, **kw)
+        return build_retriever(strategy=strategy, asias_weight=asias_weight,
+                               asrs_weight=asrs_weight, k=top_k, **kw)
     except Exception as e:
         print(f"WARNING: RAG retriever unavailable ({e}); falling back to no-RAG.")
         return None
@@ -316,13 +317,27 @@ def main():
                         help="Use only the first N records (smoke-test subset).")
     parser.add_argument("--model", default=None,
                         help="Ollama model for the RAG retriever's Cypher (C2-C4).")
+    parser.add_argument("--input", default=NTSB_CLEAN,
+                        help="NTSB CSV to train on (e.g. data/ntsb_subset.csv).")
+    parser.add_argument("--save-path", default=None,
+                        help="Where to save the checkpoint (e.g. results/c4.pt). "
+                             "Default: models/lstm/hfacs_lstm.pt.")
+    parser.add_argument("--asias-weight", type=float, default=0.6,
+                        help="FAISS ASIAS weight (C5/C6 ablations).")
+    parser.add_argument("--asrs-weight", type=float, default=0.4,
+                        help="FAISS ASRS weight (C5/C6 ablations).")
+    parser.add_argument("--top-k", type=int, default=5,
+                        help="Retrieval depth k (C7/C8 ablations).")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    retriever = _build_retriever(args.rag_strategy, args.model)
+    retriever = _build_retriever(args.rag_strategy, args.model,
+                                 asias_weight=args.asias_weight,
+                                 asrs_weight=args.asrs_weight, top_k=args.top_k)
 
     train_loader, val_loader, test_loader, encoders = get_dataloaders(
-        batch_size=args.batch_size, retriever=retriever, limit=args.limit)
+        filepath=args.input, batch_size=args.batch_size, retriever=retriever,
+        limit=args.limit)
 
     print("=" * 60)
     print(f"Condition: {'C4 (RAG ' + args.rag_strategy + ')' if retriever else 'C1 (no RAG)'}")
@@ -344,7 +359,9 @@ def main():
     plt.tight_layout()
     plt.savefig(os.path.join(fig_dir, "lstm_training_curves.png"))
 
-    save_checkpoint(model, encoders, os.path.join(os.path.dirname(__file__), "hfacs_lstm.pt"), config)
+    save_path = args.save_path or os.path.join(os.path.dirname(__file__), "hfacs_lstm.pt")
+    os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+    save_checkpoint(model, encoders, save_path, config)
 
 
 if __name__ == "__main__":

@@ -1,322 +1,320 @@
 """
-eval.py
-=======
-End-to-end evaluation for the four-head causal LSTM.
+eval.py  —  Stage-6 cross-condition evaluation of the HFACS causal LSTM
+=======================================================================
+Evaluates trained checkpoints across up to 8 conditions on the held-out TEST
+split and emits comparison images + results/eval_summary.csv.
 
-Reports ROC curves, confusion matrices, generalization gap, classification
-reports, and a bootstrapped feature-ablation study for all four heads
-(Supervisory, Operator, Unsafe Acts, Severity).
+RECONCILED to the current architecture (supersedes the old spec):
+  * train.evaluate() returns 10 values (5 heads O/A/B/C/D). O/A/B/C are
+    MULTI-LABEL (sigmoid) → micro/macro-F1, precision, recall, exact-match.
+    D (severity) is single-class → accuracy, balanced-acc, macro-F1, kappa.
+  * get_dataloaders builds the test set prior-free, so a C2-C8 checkpoint (which
+    expects prior-appended dims) is evaluated on a test loader built WITH the
+    matching retriever here (RAG priors computed at test time).
 
-Requirements: neo4j, ollama, pandas, torch, scikit-learn, anthropic (optional)
+Conditions (each needs results/c{n}.pt; evaluate whichever exist):
+  C1 no-RAG · C2 FAISS · C3 Cypher · C4 hybrid ·
+  C5 hybrid ASIAS-only (1.0/0.0) · C6 hybrid ASRS-only (0.0/1.0) ·
+  C7 FAISS k=10 · C8 hybrid k=1   (C5-C8 = retrieval ablations)
+
+Usage:
+  python models/lstm/eval.py --input data/ntsb_subset.csv --model qwen2.5:3b
 """
 
+import argparse
 import os
 import sys
-import warnings
 
-import shap
-import torch
-import torch.nn as nn
-import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.metrics import (
-    classification_report,
-    balanced_accuracy_score, f1_score, cohen_kappa_score,
-)
+import pandas as pd
+import torch
+from torch.utils.data import DataLoader
+from sklearn.metrics import (f1_score, precision_score, recall_score,
+                             accuracy_score, balanced_accuracy_score,
+                             cohen_kappa_score, confusion_matrix,
+                             roc_curve, roc_auc_score)
 
-warnings.filterwarnings("ignore", category=UserWarning, module="sklearn.metrics")
-
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
-from data.real_dataloader import get_dataloaders  # noqa: E402
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.join(_HERE, "..", "..")
+sys.path.insert(0, _ROOT)
+sys.path.insert(0, os.path.join(_ROOT, "data"))
+import ntsbdataloader as N                              # noqa: E402
+from ntsbdataloader import (NTSBSequenceDataset, NTSBEncoders, load_and_join,   # noqa: E402
+                            _split, ORG_SUBS, SUP_SUBS, PRECOND_SUBS, N_O, N_A)
 from models.lstm.train import HFACSCausalLSTM, evaluate  # noqa: E402
+from models import eval_utils as EU                     # noqa: E402
 
-from models.eval_utils import (  # noqa: E402
-    clean_feature_name, plot_roc_curves, plot_sensitivity_bars, plot_confusion_matrices,
-)
+RESULTS = os.path.join(_ROOT, "results")
+os.makedirs(RESULTS, exist_ok=True)
 
-
-# --- Helper Functions ---
-
-def _run_metrics(true_A, true_B, true_C, true_D, pred_A, pred_B, pred_C, pred_D):
-    """Balanced accuracy, Macro F1, and Kappa across all four tasks."""
-    tasks = [
-        ("Supervisory", true_A, pred_A),
-        ("Operator",    true_B, pred_B),
-        ("Unsafe Acts", true_C, pred_C),
-        ("Severity",    true_D, pred_D),
-    ]
-    results = []
-    for name, true, pred in tasks:
-        results.append({
-            "Task": name,
-            "Bal-Acc": balanced_accuracy_score(true, pred),
-            "Macro-F1": f1_score(true, pred, average="macro", zero_division=0),
-            "Kappa": cohen_kappa_score(true, pred),
-        })
-    return results
+# Condition table. C5-C8 are retrieval ablations exercising the rag_retriever
+# knobs (per-source FAISS weights, retrieval depth k).
+CONDITIONS = [
+    dict(name="C1", ckpt="c1.pt", strategy=None, kw={}),
+    dict(name="C2", ckpt="c2.pt", strategy="faiss", kw={}),
+    dict(name="C3", ckpt="c3.pt", strategy="cypher", kw={}),
+    dict(name="C4", ckpt="c4.pt", strategy="hybrid", kw={}),
+    dict(name="C5", ckpt="c5.pt", strategy="hybrid", kw=dict(asias_weight=1.0, asrs_weight=0.0)),
+    dict(name="C6", ckpt="c6.pt", strategy="hybrid", kw=dict(asias_weight=0.0, asrs_weight=1.0)),
+    dict(name="C7", ckpt="c7.pt", strategy="faiss", kw=dict(k=10)),
+    dict(name="C8", ckpt="c8.pt", strategy="hybrid", kw=dict(k=1)),
+]
 
 
-def _collect_probs(model, loader, device):
-    """Softmax probs and true labels for all four heads."""
+# ---------------------------------------------------------------------------
+# Inference / metrics
+# ---------------------------------------------------------------------------
+
+def _loader(df, encoders, retriever, batch):
+    ds = NTSBSequenceDataset(df, encoders, retriever=retriever)
+    return DataLoader(ds, batch_size=batch, shuffle=False)
+
+
+def infer_probs(model, loader, device):
+    """One pass collecting sigmoid/softmax probabilities + stacked inputs."""
     model.eval()
-    probs_A, probs_B, probs_C, probs_D = [], [], [], []
-    true_A, true_B, true_C, true_D     = [], [], [], []
+    pO, pA, pB, pC, pD = [], [], [], [], []
+    inputs = []
     with torch.no_grad():
-        for batch in loader:
-            s_a, s0, y_A, y_B, y_C, y_D = batch
-            lA, lB, lC, lD = model(s_a.to(device), s0.to(device))
-            probs_A.append(torch.softmax(lA, dim=1).cpu())
-            probs_B.append(torch.softmax(lB, dim=1).cpu())
-            probs_C.append(torch.softmax(lC, dim=1).cpu())
-            probs_D.append(torch.softmax(lD, dim=1).cpu())
-            true_A.extend(y_A.tolist())
-            true_B.extend(y_B.tolist())
-            true_C.extend(y_C.tolist())
-            true_D.extend(y_D.tolist())
-    return (
-        torch.cat(probs_A).numpy(), np.array(true_A),
-        torch.cat(probs_B).numpy(), np.array(true_B),
-        torch.cat(probs_C).numpy(), np.array(true_C),
-        torch.cat(probs_D).numpy(), np.array(true_D),
-    )
+        for s_o, s_a, s_b, *_ in loader:
+            s_o, s_a, s_b = s_o.to(device), s_a.to(device), s_b.to(device)
+            lO, lA, lB, lC, lD = model(s_o, s_a, s_b)
+            for lg, store in ((lO, pO), (lA, pA), (lB, pB), (lC, pC)):
+                store.append(torch.sigmoid(lg).cpu().numpy())
+            pD.append(torch.softmax(lD, 1).cpu().numpy())
+            inputs.append(torch.cat([s_o, s_a, s_b], dim=1).cpu().numpy())
+    cat = lambda xs: np.concatenate(xs, 0) if xs else np.empty((0,))
+    return (cat(pO), cat(pA), cat(pB), cat(pC), cat(pD), cat(inputs))
 
 
-def _lstm_batch_infer(m, s_a_arr, s0_arr, dev, batch_size=64):
-    """Batch inference returning argmax predictions for all four heads."""
-    m.eval()
-    pA_all, pB_all, pC_all, pD_all = [], [], [], []
+def head_ml_metrics(prefix, y, p):
+    kw = dict(zero_division=0)
+    return {
+        f"{prefix}_microF1": f1_score(y, p, average="micro", **kw),
+        f"{prefix}_macroF1": f1_score(y, p, average="macro", **kw),
+        f"{prefix}_P": precision_score(y, p, average="micro", **kw),
+        f"{prefix}_R": recall_score(y, p, average="micro", **kw),
+        f"{prefix}_exact": float((y == p).all(axis=1).mean()) if len(y) else 0.0,
+        f"{prefix}_support": int(y.sum()),
+    }
+
+
+def severity_metrics(aD, pD, n_D):
+    labels = list(range(n_D))
+    cm = confusion_matrix(aD, pD, labels=labels) if len(aD) else np.zeros((n_D, n_D), int)
+    return {
+        "D_accuracy": accuracy_score(aD, pD) if len(aD) else 0.0,
+        "D_balanced_acc": balanced_accuracy_score(aD, pD) if len(aD) else 0.0,
+        "D_macroF1": f1_score(aD, pD, average="macro", labels=labels, zero_division=0) if len(aD) else 0.0,
+        "D_kappa": cohen_kappa_score(aD, pD) if len(set(aD.tolist())) > 1 else 0.0,
+    }, (cm, labels)
+
+
+def chain_completion_rate(tO, tA, tB, tC, tD, pO, pA, pB, pC, pD):
+    if len(tD) == 0:
+        return 0.0
+    ok = ((tO == pO).all(1) & (tA == pA).all(1) & (tB == pB).all(1)
+          & (tC == pC).all(1) & (tD == pD))
+    return float(ok.mean())
+
+
+def _roc(y_true_2d, prob_2d):
+    yt, pp = y_true_2d.ravel(), prob_2d.ravel()
+    if yt.min() == yt.max():            # one class only -> ROC undefined
+        return None
+    fpr, tpr, _ = roc_curve(yt, pp)
+    return fpr, tpr, roc_auc_score(yt, pp)
+
+
+def mcnemar_test(base_correct, rag_correct):
+    from statsmodels.stats.contingency_tables import mcnemar
+    both = int((base_correct & rag_correct).sum())
+    b10 = int((base_correct & ~rag_correct).sum())   # base right, RAG wrong
+    b01 = int((~base_correct & rag_correct).sum())   # base wrong, RAG right (RAG helps)
+    neither = int((~base_correct & ~rag_correct).sum())
+    res = mcnemar([[both, b10], [b01, neither]], exact=True)
+    return {"p_value": float(res.pvalue), "b01": b01, "b10": b10,
+            "significant": bool(res.pvalue < 0.05)}
+
+
+# ---------------------------------------------------------------------------
+# Feature names + sensitivity + SHAP (C1 & C4)
+# ---------------------------------------------------------------------------
+
+def feature_names(cfg):
+    n_o, n_a, n_b = cfg["step_o_dim"], cfg["step_a_dim"], cfg["step_b_dim"]
+    names = [f"o:{x}" for x in ["emp_qoq", "fuel_qoq", "industry_total", "fuel_cpg",
+                                "emp_bracket", "fuel_bracket", "invest_type"]]
+    names += [f"o:orgPrior[{ORG_SUBS[i]}]" for i in range(n_o - 7)]
+    names += [f"a:org[{ORG_SUBS[i]}]" for i in range(N_O)]
+    names += [f"a:supPrior[{SUP_SUBS[i]}]" for i in range(n_a - N_O)]
+    names += [f"b:{x}" for x in ["visual", "light", "sky", "tod", "person", "pilot_hours"]]
+    names += [f"b:sup[{SUP_SUBS[i]}]" for i in range(N_A)]
+    names += [f"b:precPrior[{PRECOND_SUBS[i]}]" for i in range(n_b - (6 + N_A))]
+    return names
+
+
+def _scalar(model, flat, dims, device):
+    """Target = mean over batch of max softmax severity probability."""
+    n_o, n_a = dims
+    X = torch.tensor(np.asarray(flat, dtype="float32"), device=device)
+    if X.ndim == 1:
+        X = X.unsqueeze(0)
+    s_o, s_a, s_b = X[:, :n_o], X[:, n_o:n_o + n_a], X[:, n_o + n_a:]
     with torch.no_grad():
-        for i in range(0, len(s_a_arr), batch_size):
-            lA, lB, lC, lD = m(s_a_arr[i:i + batch_size].to(dev), s0_arr[i:i + batch_size].to(dev))
-            pA_all.extend(lA.argmax(1).cpu().tolist())
-            pB_all.extend(lB.argmax(1).cpu().tolist())
-            pC_all.extend(lC.argmax(1).cpu().tolist())
-            pD_all.extend(lD.argmax(1).cpu().tolist())
-    return np.array(pA_all), np.array(pB_all), np.array(pC_all), np.array(pD_all)
+        *_, lD = model(s_o, s_a, s_b)
+        return torch.softmax(lD, 1).max(1).values.cpu().numpy()
 
 
-class _LSTMOutputWrapper(nn.Module):
-    """Concatenates [s_a | s0] for SHAP compatibility — selects one head."""
-    def __init__(self, lstm_model, output_idx):
-        super().__init__()
-        self.model = lstm_model
-        self.output_idx = output_idx
+def sensitivity(model, flatX, dims, device, n_repeat=3, seed=0):
+    """Perturbation importance: shuffle each feature column, measure |Δ target|."""
+    rng = np.random.default_rng(seed)
+    base = _scalar(model, flatX, dims, device).mean()
+    D = flatX.shape[1]
+    imp = np.zeros(D)
+    for d in range(D):
+        deltas = []
+        for _ in range(n_repeat):
+            Xp = flatX.copy()
+            Xp[:, d] = flatX[rng.permutation(len(flatX)), d]
+            deltas.append(abs(_scalar(model, Xp, dims, device).mean() - base))
+        imp[d] = np.mean(deltas)
+    return imp
 
-    def forward(self, x):
-        return self.model(x[:, :2], x[:, 2:])[self.output_idx]
+
+def shap_importance(model, flatX, dims, device, nbg=20, nsample=20):
+    """mean|SHAP| via KernelExplainer on the severity target; fallback=sensitivity."""
+    try:
+        import shap
+        bg = flatX[:min(nbg, len(flatX))]
+        f = lambda X: _scalar(model, X, dims, device)
+        expl = shap.KernelExplainer(f, bg)
+        sv = expl.shap_values(flatX[:min(nsample, len(flatX))], nsamples=100, silent=True)
+        sv = np.asarray(sv)
+        return np.abs(sv).mean(axis=0)
+    except Exception as e:
+        print(f"  SHAP unavailable ({e.__class__.__name__}); using permutation importance.")
+        return sensitivity(model, flatX[:min(nsample, len(flatX))], dims, device)
+
+
+# ---------------------------------------------------------------------------
+# Per-condition + main
+# ---------------------------------------------------------------------------
+
+def _retriever(strategy, model, kw):
+    if not strategy:
+        return None
+    try:
+        from rag_retriever import build_retriever
+        return build_retriever(strategy=strategy, model=model, **kw)
+    except Exception as e:
+        print(f"  retriever unavailable ({e.__class__.__name__}) — uniform priors.")
+        return None
 
 
 def main():
-    FILEPATH    = os.path.join(os.path.dirname(__file__), "..", "..", "data", "dataset.csv")
-    MODEL_PATH  = os.path.join(os.path.dirname(__file__), "hfacs_lstm.pt")
-    FIG_DIR     = os.path.join(os.path.dirname(__file__), "..", "..", "figures")
-    RESULTS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "results")
-    BATCH_SIZE, N_BOOTSTRAP = 32, 30
-    DEVICE      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ap = argparse.ArgumentParser(description="Stage-6 cross-condition LSTM evaluation")
+    ap.add_argument("--input", default=N.NTSB_CLEAN)
+    ap.add_argument("--model", default=None, help="Ollama model for C2-C8 Cypher.")
+    ap.add_argument("--results-dir", default=RESULTS)
+    ap.add_argument("--train-sample", type=int, default=128,
+                    help="Train rows used for the generalization gap (bounds retrieval).")
+    ap.add_argument("--batch-size", type=int, default=64)
+    args = ap.parse_args()
+    EU._utf8()
 
-    os.makedirs(FIG_DIR, exist_ok=True); os.makedirs(RESULTS_DIR, exist_ok=True)
-    train_loader, _, test_loader, encoders = get_dataloaders(FILEPATH, batch_size=BATCH_SIZE)
+    df = load_and_join(args.input)
+    df_train, _, df_test = _split(df)
+    encoders = NTSBEncoders(df_train)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Test records: {len(df_test)} | train(for gap): {min(args.train_sample, len(df_train))}")
 
-    # ── Load Model ──
-    ckpt = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
-    sd = ckpt['state_dict'] if isinstance(ckpt, dict) and 'state_dict' in ckpt else ckpt
-    h_size = ckpt.get('config', {}).get('hidden_size', sd["cell_a.weight_hh"].shape[1])
+    summary, confusions, roc_data, sens, shap_d, fnames = [], {}, {}, {}, {}, {}
+    c_correct = {}
 
-    n_A = len(encoders.enc_supervisory.classes_)
-    n_B = len(encoders.enc_operator.classes_)
-    n_C = len(encoders.enc_unsafe.classes_)
-    n_D = len(encoders.enc_severity.classes_)
+    for cond in CONDITIONS:
+        path = os.path.join(args.results_dir, cond["ckpt"])
+        if not os.path.exists(path):
+            print(f"{cond['name']}: no checkpoint ({cond['ckpt']}) — skipping.")
+            continue
+        print(f"\n=== {cond['name']} ({path}) ===")
+        ck = torch.load(path, weights_only=False)
+        cfg = ck["config"]; n_D = cfg["n_D"]
+        retr = _retriever(cond["strategy"], args.model, cond["kw"])
+        model = HFACSCausalLSTM(**cfg).to(device)
+        model.load_state_dict(ck["state_dict"]); model.eval()
 
-    model = HFACSCausalLSTM(
-        hidden_size=h_size, n_A=n_A, n_B=n_B, n_C=n_C, n_D=n_D,
-    ).to(DEVICE)
-    model.load_state_dict(sd); model.eval()
+        test_loader = _loader(df_test, encoders, retr, args.batch_size)
+        aO, aA, aB, aC, aD, pO, pA, pB, pC, pD = evaluate(model, test_loader, device)
 
-    # ── 1. Generalization Gap ──
-    print("Computing Generalization Gap...")
-    tr_tA, tr_tB, tr_tC, tr_tD, tr_pA, tr_pB, tr_pC, tr_pD = evaluate(model, train_loader, DEVICE)
-    ts_tA, ts_tB, ts_tC, ts_tD, ts_pA, ts_pB, ts_pC, ts_pD = evaluate(model, test_loader, DEVICE)
+        row = {"condition": cond["name"], "n_test": len(aD)}
+        for pre, y, p in (("O", aO, pO), ("A", aA, pA), ("B", aB, pB), ("C", aC, pC)):
+            row.update(head_ml_metrics(pre, y, p))
+        sev, cm = severity_metrics(aD, pD, n_D)
+        row.update(sev)
+        row["chain_completion_rate"] = chain_completion_rate(aO, aA, aB, aC, aD, pO, pA, pB, pC, pD)
 
-    tr_mets = _run_metrics(tr_tA, tr_tB, tr_tC, tr_tD, tr_pA, tr_pB, tr_pC, tr_pD)
-    ts_mets = _run_metrics(ts_tA, ts_tB, ts_tC, ts_tD, ts_pA, ts_pB, ts_pC, ts_pD)
-    gap_rows = []
-    header = f"{'Task':<15} | {'Metric':<12} | {'Train':>10} | {'Test':>10} | {'Gap':>10}"
-    print("\n" + header + "\n" + "-" * 65)
-    for tr, ts in zip(tr_mets, ts_mets):
-        for m in ["Bal-Acc", "Macro-F1", "Kappa"]:
-            gap = tr[m] - ts[m]
-            fmt = ".2%" if "Acc" in m else ".4f"
-            print(f"{tr['Task']:<15} | {m:<12} | {tr[m]:>{10}{fmt}} | {ts[m]:>{10}{fmt}} | {gap:>{10}{fmt}}")
-            gap_rows.append({"Task": tr['Task'], "Metric": m, "Train": tr[m], "Test": ts[m], "Gap": gap})
-        print("-" * 65)
-    pd.DataFrame(gap_rows).to_csv(os.path.join(RESULTS_DIR, "lstm_generalization_gap.csv"), index=False)
+        # generalization gap on C (capped train subsample)
+        tr_sub = df_train.head(args.train_sample)
+        tr_loader = _loader(tr_sub, encoders, retr, args.batch_size)
+        _, _, trC, _, _, _, _, prC, _, _ = evaluate(model, tr_loader, device)
+        train_f1C = f1_score(trC, prC, average="micro", zero_division=0)
+        row["generalization_error_C"] = float(train_f1C - row["C_microF1"])
 
-    # ── 2. Ablation Study (Sensitivity) ──
-    print("\nRunning Bootstrapped Feature Ablation (30 resamples)...")
-    all_s_a, all_s0 = [], []
-    with torch.no_grad():
-        for s_a, s0, *_ in test_loader:
-            all_s_a.append(s_a); all_s0.append(s0)
-    s_a_ts, s0_ts = torch.cat(all_s_a), torch.cat(all_s0)
+        c_correct[cond["name"]] = (aC == pC).all(axis=1)
+        confusions[cond["name"]] = cm
+        summary.append(row)
 
-    # Personnel now an intervenable feature reflecting the new DAG edge
-    # Personnel → Operator, Personnel → Unsafe Acts.
-    ABL_MAP = {
-        "Org. Climate": ("s_a", 0),
-        "Employment":   ("s_a", 1),
-        "Weather":      ("s0", 0),
-        "Time of Day":  ("s0", 1),
-        "Sky Cond.":    ("s0", 2),
-        "Personnel":    ("s0", 3),
-    }
-    TASKS = ["Supervisory", "Operator", "Unsafe Acts", "Severity"]
-    rng = np.random.default_rng(42)
-    final_abl_rows = []
+        # ROC (probabilities)
+        prO, prA, prB, prC2, prD, flatX = infer_probs(model, test_loader, device)
+        onehotD = np.eye(n_D)[aD] if len(aD) else np.zeros((0, n_D))
+        roc_data[cond["name"]] = {
+            "O": _roc(aO, prO), "A": _roc(aA, prA), "B": _roc(aB, prB),
+            "C": _roc(aC, prC2), "D": _roc(onehotD, prD)}
 
-    for feat in [None] + list(ABL_MAP.keys()):
-        drops = {t: [] for t in TASKS}
-        for _ in range(N_BOOTSTRAP):
-            idx = rng.choice(len(s_a_ts), size=len(s_a_ts), replace=True)
-            s_a_b, s0_b = s_a_ts[idx], s0_ts[idx]
-            tA_b = np.array(ts_tA)[idx]; tB_b = np.array(ts_tB)[idx]
-            tC_b = np.array(ts_tC)[idx]; tD_b = np.array(ts_tD)[idx]
+        # sensitivity + SHAP for C1 and C4 only
+        if cond["name"] in ("C1", "C4") and len(flatX):
+            dims = (cfg["step_o_dim"], cfg["step_a_dim"])
+            fnames[cond["name"]] = feature_names(cfg)
+            sens[cond["name"]] = sensitivity(model, flatX, dims, device)
+            shap_d[cond["name"]] = shap_importance(model, flatX, dims, device)
 
-            pA_base, pB_base, pC_base, pD_base = _lstm_batch_infer(model, s_a_b, s0_b, DEVICE)
-            base_accs = [
-                balanced_accuracy_score(tA_b, pA_base),
-                balanced_accuracy_score(tB_b, pB_base),
-                balanced_accuracy_score(tC_b, pC_base),
-                balanced_accuracy_score(tD_b, pD_base),
-            ]
+        if retr is not None:
+            retr.close()
 
-            if feat is None:
-                for k in TASKS:
-                    drops[k].append(0.0)
-            else:
-                s_a_a, s0_a = s_a_b.clone(), s0_b.clone()
-                t_name, col = ABL_MAP[feat]
-                if t_name == "s_a":
-                    s_a_a[:, col] = 0.0
-                else:
-                    s0_a[:, col] = 0.0
-                pA_a, pB_a, pC_a, pD_a = _lstm_batch_infer(model, s_a_a, s0_a, DEVICE)
-                abl_accs = [
-                    balanced_accuracy_score(tA_b, pA_a),
-                    balanced_accuracy_score(tB_b, pB_a),
-                    balanced_accuracy_score(tC_b, pC_a),
-                    balanced_accuracy_score(tD_b, pD_a),
-                ]
-                for i, k in enumerate(TASKS):
-                    drops[k].append(base_accs[i] - abl_accs[i])
+    if not summary:
+        print("No checkpoints found in results/. Train conditions first (train.py --save-path).")
+        return
 
-        for k in TASKS:
-            final_abl_rows.append({
-                "ablated": feat or "Baseline",
-                "task": k,
-                "mean_drop": float(np.mean(drops[k])),
-                "std_drop":  float(np.std(drops[k])),
-            })
+    # McNemar C1 vs C4 on Unsafe Acts
+    mcn = None
+    if "C1" in c_correct and "C4" in c_correct:
+        mcn = mcnemar_test(c_correct["C1"], c_correct["C4"])
+        print(f"\nMcNemar C1 vs C4 on Unsafe Acts (C): "
+              f"p={mcn['p_value']:.4f} b01(RAG helps)={mcn['b01']} "
+              f"b10(RAG hurts)={mcn['b10']} significant={mcn['significant']}")
 
-    abl_df = pd.DataFrame(final_abl_rows)
-    abl_df.to_csv(os.path.join(RESULTS_DIR, "lstm_sensitivity.csv"), index=False)
-    plot_df = abl_df[abl_df["ablated"] != "Baseline"].copy()
+    # save summary CSV
+    pd.DataFrame(summary).to_csv(os.path.join(args.results_dir, "eval_summary.csv"), index=False)
+    if mcn:
+        pd.DataFrame([mcn]).to_csv(os.path.join(args.results_dir, "mcnemar_c1_c4.csv"), index=False)
+    print(f"\nWrote {os.path.join(args.results_dir, 'eval_summary.csv')}")
 
-    plot_sensitivity_bars(
-        plot_df,
-        feature_col="ablated",
-        feature_order=list(ABL_MAP.keys()),
-        title="LSTM Feature Ablation: Accuracy Drop with 95% Bootstrap CI",
-        save_path=os.path.join(FIG_DIR, "lstm_sensitivity.png"),
-        task_col="task",
-        mean_col="mean_drop",
-        err_col="std_drop",
-        tasks=TASKS,
-    )
-
-    # ── 3. ROC Curves & Classification Reports ──
-    print("\nFinishing ROC Curves and Reports...")
-    pA, tA, pB, tB, pC, tC, pD, tD = _collect_probs(model, test_loader, DEVICE)
-    roc_data = [
-        ("Supervisory", pA, tA, np.arange(n_A)),
-        ("Operator",    pB, tB, np.arange(n_B)),
-        ("Unsafe Acts", pC, tC, np.arange(n_C)),
-        ("Severity",    pD, tD, np.arange(n_D)),
-    ]
-    plot_roc_curves(
-        roc_data, "LSTM",
-        os.path.join(FIG_DIR, "lstm_roc_curves.png"),
-        csv_path=os.path.join(RESULTS_DIR, "lstm_roc_auc.csv"),
-    )
-
-    for lbl, t, p, enc in [
-        ("Supervisory", ts_tA, ts_pA, encoders.enc_supervisory),
-        ("Operator",    ts_tB, ts_pB, encoders.enc_operator),
-        ("Unsafe Acts", ts_tC, ts_pC, encoders.enc_unsafe),
-        ("Severity",    ts_tD, ts_pD, encoders.enc_severity),
-    ]:
-        print(f"\n── {lbl} ──\n", classification_report(t, p, target_names=enc.classes_, zero_division=0))
-
-    # ── 4. Confusion Matrices ──
-    print("\nPlotting Confusion Matrices...")
-    cm_data = [
-        ("Supervisory", ts_tA, ts_pA, encoders.enc_supervisory.classes_),
-        ("Operator",    ts_tB, ts_pB, encoders.enc_operator.classes_),
-        ("Unsafe Acts", ts_tC, ts_pC, encoders.enc_unsafe.classes_),
-        ("Severity",    ts_tD, ts_pD, encoders.enc_severity.classes_),
-    ]
-    plot_confusion_matrices(cm_data, "LSTM", os.path.join(FIG_DIR, "lstm_confusion_matrices.png"))
-
-    # ── 5. SHAP Analysis ──
-    print("\nComputing LSTM SHAP (GradientExplainer)...")
-    X_cat = torch.cat([s_a_ts, s0_ts], dim=1).to(DEVICE)
-    feat_names = [
-        clean_feature_name(f) for f in [
-            "Org. Climate", "Employment",
-            "Weather", "Time of Day", "Sky Cond.", "Personnel", "Supervisory",
-        ]
-    ]
-
-    for label, idx in [
-        ("Supervisory", 0),
-        ("Operator",    1),
-        ("Unsafe_Acts", 2),
-        ("Severity",    3),
-    ]:
-        wrapper = _LSTMOutputWrapper(model, idx).to(DEVICE)
-        explainer = shap.GradientExplainer(wrapper, X_cat[:50])
-        sv = explainer.shap_values(X_cat[50:100])
-        if isinstance(sv, list):
-            actual_sv = np.array(sv[0])
-        else:
-            actual_sv = np.array(sv)
-            if actual_sv.ndim == 3:
-                actual_sv = actual_sv[:, :, 0]
-
-        with torch.no_grad():
-            bg_p = wrapper(X_cat[:50]).cpu().numpy()
-            base_v = float(np.mean(bg_p[:, 0])) if bg_p.ndim > 1 else float(np.mean(bg_p))
-
-        exp = shap.Explanation(
-            values=actual_sv.astype(float),
-            base_values=base_v,
-            data=X_cat[50:100].cpu().numpy(),
-            feature_names=feat_names,
-        )
-
-        plt.figure()
-        shap.plots.beeswarm(exp, max_display=10, show=False)
-        plt.title(f"LSTM SHAP Summary: {label}")
-        plt.savefig(os.path.join(FIG_DIR, f"lstm_shap_summary_{label}.png"), bbox_inches='tight')
-        plt.close()
-
-        plt.figure()
-        shap.plots.waterfall(exp[0], max_display=10, show=False)
-        plt.title(f"LSTM SHAP Waterfall: {label} (Sample 0)")
-        plt.savefig(os.path.join(FIG_DIR, f"lstm_shap_waterfall_{label}.png"), bbox_inches='tight')
-        plt.close()
-
-    print(f"\nEvaluation Complete. Saved to {FIG_DIR}")
+    # figures
+    print("\nFigures:")
+    EU.plot_metric_grouped(summary, "microF1")
+    EU.plot_chain_and_gengap(summary)
+    EU.plot_severity(summary, confusions)
+    EU.plot_roc(roc_data)
+    for cn in ("C1", "C4"):
+        if cn in sens:
+            EU.plot_sensitivity({cn: sens[cn]}, fnames[cn], name=f"eval_sensitivity_{cn}.png")
+        if cn in shap_d:
+            EU.plot_shap({cn: shap_d[cn]}, fnames[cn], name=f"eval_shap_{cn}.png")
+    cols = ["n_test", "O_microF1", "A_microF1", "B_microF1", "C_microF1",
+            "D_accuracy", "D_macroF1", "chain_completion_rate", "generalization_error_C"]
+    EU.plot_summary_table(summary, cols)
+    print("\nDone.")
 
 
 if __name__ == "__main__":
