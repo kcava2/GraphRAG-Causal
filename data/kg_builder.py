@@ -48,8 +48,9 @@ import pandas as pd
 # Reuse Stage-2 building blocks verbatim (single source of truth; do not modify
 # hfacs_extractor.py). Importing it also pulls in ollama/torch — that is fine.
 from hfacs_extractor import (  # noqa: E402
-    HFACS_SCHEMA, VALID_SUBS, VALID_RELATIONS,
+    HFACS_SCHEMA, VALID_SUBS, VALID_RELATIONS, EXTRACT_TIERS,
     SYSTEM_TASK1, SYSTEM_TASK2,
+    task1_schema, task2_schema,
     _call_ollama, _extract_json,
     _validate_classifications, _validate_relationships,
     _resolve_model, _clean, _GEN_OPTIONS,
@@ -131,6 +132,15 @@ def classify_edge(t1: str, t2: str):
 # source-specific narrative + structured-context block and an empty few-shot.
 # ---------------------------------------------------------------------------
 
+# Grammar vocabularies for structured outputs. EXTRACT_TIERS (not the full
+# 15-tier HFACS_SCHEMA) because `_validate_classifications` defaults to the
+# extract tiers — org/supervisory/situational_phys were already dropped after
+# generation, so constraining the grammar to them changes nothing downstream
+# and stops the model spending tokens on tiers that get discarded.
+KG_TASK1_FORMAT = task1_schema(EXTRACT_TIERS)
+KG_TASK2_FORMAT = task2_schema(EXTRACT_TIERS)
+
+
 def _kg_task1_prompt(narrative: str, context: str) -> str:
     schema_json = json.dumps(HFACS_SCHEMA, indent=2)
     parts = [f"NARRATIVE:\n{narrative}"]
@@ -147,22 +157,30 @@ def _kg_task1_prompt(narrative: str, context: str) -> str:
 
 
 def _kg_task2_prompt(narrative: str, entities: list) -> str:
-    valid_subs = sorted(VALID_SUBS.keys())
+    """Relationships between TIERS — mirrors Stage 2 `_build_task2_prompt`.
+
+    This previously asked for SUBCATEGORIES, but `_validate_relationships`
+    only accepts subject/object that are tier names, so every relationship
+    the model returned was discarded and no LLM evidence edge ever reached
+    the KG.
+    """
     return (
         f"NARRATIVE:\n{narrative}\n\n"
         f"HFACS ENTITIES:\n{json.dumps(entities)}\n\n"
-        f"VALID SUBCATEGORIES (subject/object must be one of these):\n"
-        f"{json.dumps(valid_subs)}\n\n"
-        'Extract directed causal relationships. relation must be "LEADS_TO" or '
-        '"CO_OCCURS_WITH". Respond with valid JSON only, in the shape:\n'
-        '{"relationships": [{"subject": "<sub>", "relation": "LEADS_TO", '
-        '"object": "<sub>", "evidence": "<narrative phrase>"}]}'
+        f"VALID HFACS TIERS (subject/object must be one of these tier names):\n"
+        f"{json.dumps(EXTRACT_TIERS)}\n\n"
+        'Extract directed causal relationships between TIERS. relation must '
+        'be "LEADS_TO" or "CO_OCCURS_WITH". Respond with valid JSON only, '
+        'in the shape:\n'
+        '{"relationships": [{"subject": "<tier>", "relation": "LEADS_TO", '
+        '"object": "<tier>", "evidence": "<narrative phrase>"}]}'
     )
 
 
 def extract_record(model_name: str, narrative: str, context: str):
     """Run Task 1 + Task 2; return (entities, classifications, relationships, status)."""
-    raw1 = _call_ollama(model_name, SYSTEM_TASK1, _kg_task1_prompt(narrative, context))
+    raw1 = _call_ollama(model_name, SYSTEM_TASK1, _kg_task1_prompt(narrative, context),
+                        schema=KG_TASK1_FORMAT)
     parsed1 = _extract_json(raw1)
     if parsed1 is None:
         return [], {}, [], "parse_error"
@@ -175,7 +193,8 @@ def extract_record(model_name: str, narrative: str, context: str):
 
     relationships = []
     if status == "success":
-        raw2 = _call_ollama(model_name, SYSTEM_TASK2, _kg_task2_prompt(narrative, entities))
+        raw2 = _call_ollama(model_name, SYSTEM_TASK2, _kg_task2_prompt(narrative, entities),
+                            schema=KG_TASK2_FORMAT)
         relationships = _validate_relationships(_extract_json(raw2))
     return entities, classifications, relationships, status
 
@@ -503,16 +522,33 @@ def process_record(writer: KGWriter, model_name: str, source: str, row: pd.Serie
         for t, v in active:
             writer.merge_context_factor_edge(label, keys, t, v)
 
-    # LLM-extracted relationship edges (with evidence).
+    # LLM-extracted relationship edges (with evidence). Subject/object are TIER
+    # names (that is all `_validate_relationships` accepts), while factor nodes
+    # are keyed by (tier, value) — so each relationship is landed on the values
+    # actually extracted for this event. A tier with no extracted value has no
+    # node to attach to and is skipped.
+    #
+    # This path was previously dead: the prompt asked for subcategories, the
+    # validator dropped them all, and the `VALID_SUBS[subject]` lookup below
+    # would have raised KeyError on any tier that did survive.
+    values_by_tier: dict[str, list[str]] = {}
+    for t, v in active:
+        values_by_tier.setdefault(t, []).append(v)
+
     for r in relationships:
-        s, o, rel = r["subject"], r["object"], r["relation"]
-        ts, to = VALID_SUBS[s], VALID_SUBS[o]
-        if rel == "LEADS_TO":
-            writer.merge_factor_edge(ts, s, to, o, "LEADS_TO", evidence=r.get("evidence"))
-        else:
-            (a, b) = sorted([(ts, s), (to, o)])
-            writer.merge_factor_edge(a[0], a[1], b[0], b[1], "CO_OCCURS_WITH",
-                                     evidence=r.get("evidence"))
+        subj, obj, rel = r["subject"], r["object"], r["relation"]
+        evidence = r.get("evidence")
+        for v1 in values_by_tier.get(subj, []):
+            for v2 in values_by_tier.get(obj, []):
+                if (subj, v1) == (obj, v2):
+                    continue
+                if rel == "LEADS_TO":
+                    writer.merge_factor_edge(subj, v1, obj, v2, "LEADS_TO",
+                                             evidence=evidence)
+                else:
+                    (a, b) = sorted([(subj, v1), (obj, v2)])
+                    writer.merge_factor_edge(a[0], a[1], b[0], b[1],
+                                             "CO_OCCURS_WITH", evidence=evidence)
 
     writer.mark_processed(event_id, source)
     return status

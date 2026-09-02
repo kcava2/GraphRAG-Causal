@@ -11,10 +11,14 @@ so labeling val/test records never leaks val/test examples into a prompt.
     Task 1  entity + HFACS classification  -> {entities, hfacs_classifications}
     Task 2  causal relationship extraction -> {relationships}
 
-Both responses are validated against the 15-tier ``HFACS_SCHEMA`` defined here
-(the single source of truth — there is no ``config/`` package). Any tier,
-subcategory, or relation value not in the schema is silently dropped. Output is
-one row per record in ``data/hfacs_results.csv``:
+Both calls use **Ollama structured outputs**: a JSON Schema derived from
+``HFACS_SCHEMA`` is passed as ``format=``, so decoding is grammar-constrained and
+the model cannot emit an unknown tier, a bad relation, or unparseable JSON. The
+schema constrains the *vocabulary* only — every tier is optional, so nothing is
+forced into a label. ``_extract_json`` and the ``_validate_*`` helpers remain as a
+safety net for ``--no-structured`` runs and models without grammar support, where
+off-schema values are still silently dropped. Output is one row per record in
+``data/hfacs_results.csv``:
 
     ev_id, entities_json, hfacs_json, relationships_json, extraction_status
 
@@ -147,6 +151,104 @@ EXTRACT_VALID_SUBS = {sub: t for t in EXTRACT_TIERS for sub in HFACS_SCHEMA[t]}
 
 
 # ---------------------------------------------------------------------------
+# JSON Schemas for Ollama structured outputs
+# ---------------------------------------------------------------------------
+# Passed as ``format=`` on every chat call. Ollama constrains decoding to the
+# schema, so the model *cannot* emit an unknown tier, a malformed relation, or
+# unparseable JSON — the failure modes `_extract_json` and the `_validate_*`
+# helpers used to absorb silently. Those two layers are kept as a safety net
+# (the schema is not enforced when --no-structured is passed, and a model
+# without grammar support falls back to free-form).
+#
+# Every property is OPTIONAL: the schema constrains the *vocabulary*, never
+# which tiers must appear. Requiring tiers would manufacture labels, which is
+# exactly the bias this stage must not introduce.
+
+
+def classification_schema(tiers: list[str]) -> dict:
+    """`{"hfacs_classifications": {<tier>: ["<evidence phrase>", ...]}}`."""
+    return {
+        "type": "object",
+        "properties": {
+            tier: {"type": "array", "items": {"type": "string"}}
+            for tier in tiers
+        },
+        "additionalProperties": False,
+    }
+
+
+def task1_schema(tiers: list[str], with_entities: bool = True) -> dict:
+    """Pass-1 shape: entities + tier-keyed classifications."""
+    props = {"hfacs_classifications": classification_schema(tiers)}
+    if with_entities:
+        props["entities"] = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "role": {"type": "string"},
+                    "tier": {"type": "string", "enum": tiers},
+                },
+                "required": ["text", "role", "tier"],
+                "additionalProperties": False,
+            },
+        }
+    return {
+        "type": "object",
+        "properties": props,
+        "required": ["hfacs_classifications"],
+        "additionalProperties": False,
+    }
+
+
+def task2_schema(vocab: list[str]) -> dict:
+    """Task-2 shape: relationships over `vocab` (TIER names — see note below).
+
+    `_validate_relationships` accepts subject/object only when they are TIERS,
+    so the grammar must emit tiers too; a subcategory-level vocabulary here
+    would be discarded downstream.
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "relationships": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "subject": {"type": "string", "enum": vocab},
+                        "relation": {"type": "string",
+                                     "enum": sorted(VALID_RELATIONS)},
+                        "object": {"type": "string", "enum": vocab},
+                        "evidence": {"type": "string"},
+                    },
+                    "required": ["subject", "relation", "object", "evidence"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["relationships"],
+        "additionalProperties": False,
+    }
+
+
+UNSAFE_FORMAT = task1_schema(UNSAFE_EXTRACT_TIERS)
+PRECOND_FORMAT = task1_schema(PRECOND_EXTRACT_TIERS, with_entities=False)
+RELATION_FORMAT = task2_schema(EXTRACT_TIERS)
+
+# Toggled off by --no-structured (kept global so kg_builder inherits the choice).
+_STRUCTURED = True
+
+# Reasoning models (gemma4, qwen3, ...) advertise a `thinking` capability and
+# may enable it by default. Thinking tokens are pure cost here: the task is
+# bounded schema-constrained extraction, and the reasoning text is returned
+# separately from `message.content` so it never reaches the parser anyway.
+# Off by default; --think re-enables it.
+_THINK = False
+
+
+# ---------------------------------------------------------------------------
 # Train split — deterministic, mirrors data/dataloader.py exactly
 # ---------------------------------------------------------------------------
 
@@ -210,11 +312,27 @@ def _extract_json(raw: str):
         return None
 
 
+_SCHEMA_UNSUPPORTED = False   # set once if the server rejects `format=`
+_THINK_UNSUPPORTED = False    # set once if the model rejects `think=`
+
+
 def _call_ollama(model_name: str, system: str, user: str,
-                 retries: int = 3) -> str | None:
-    """Single deterministic Ollama chat with retries. Raw text or None."""
+                 retries: int = 3, schema: dict | None = None) -> str | None:
+    """Single deterministic Ollama chat with retries. Raw text or None.
+
+    When `schema` is given and structured output is enabled, it is passed as
+    Ollama's ``format=`` so decoding is grammar-constrained to that shape.
+    Falls back to free-form generation (once, permanently) if the server or
+    model does not support constrained decoding.
+    """
+    global _SCHEMA_UNSUPPORTED, _THINK_UNSUPPORTED
+    use_schema = schema if (schema and _STRUCTURED and not _SCHEMA_UNSUPPORTED) else None
+    send_think = not _THINK_UNSUPPORTED
     for attempt in range(1, retries + 1):
         try:
+            kwargs = {"format": use_schema} if use_schema else {}
+            if send_think:
+                kwargs["think"] = _THINK
             response = ollama.chat(
                 model=model_name,
                 messages=[
@@ -222,6 +340,7 @@ def _call_ollama(model_name: str, system: str, user: str,
                     {"role": "user", "content": user},
                 ],
                 options=_GEN_OPTIONS,
+                **kwargs,
             )
             return response["message"]["content"]
         except Exception as e:
@@ -231,6 +350,19 @@ def _call_ollama(model_name: str, system: str, user: str,
                     "\nERROR: Cannot connect to Ollama.\n"
                     "Start it with 'ollama serve' or open the Ollama app."
                 )
+            if send_think and "think" in err:
+                logging.warning(
+                    "Model does not accept think= (%s) — omitting it from here on.", e)
+                _THINK_UNSUPPORTED = True
+                send_think = False
+                continue
+            if use_schema and ("format" in err or "schema" in err or "grammar" in err):
+                logging.warning(
+                    "Model/server rejected structured output (%s) — falling back "
+                    "to free-form JSON for the rest of the run.", e)
+                _SCHEMA_UNSUPPORTED = True
+                use_schema = None
+                continue
             logging.error(f"LLM error attempt {attempt}: {e}")
             if attempt < retries:
                 time.sleep(2)
@@ -523,7 +655,8 @@ def extract_row(model_name: str, row: pd.Series, n_fewshot: int = 5) -> dict:
     fewshot = get_ntsb_fewshot_examples(narrative, n=n_fewshot, exclude_ev_id=ev_id)
 
     # Pass 1 — UNSAFE ACTS (evidence-gated, >=1 required)
-    raw1 = _call_ollama(model_name, SYSTEM_TASK1, _build_unsafe_prompt(row, fewshot))
+    raw1 = _call_ollama(model_name, SYSTEM_TASK1, _build_unsafe_prompt(row, fewshot),
+                        schema=UNSAFE_FORMAT)
     parsed1 = _extract_json(raw1)
     if parsed1 is None:
         return {
@@ -537,7 +670,8 @@ def extract_row(model_name: str, row: pd.Series, n_fewshot: int = 5) -> dict:
                                        UNSAFE_EXTRACT_TIERS)
 
     # Pass 2 — PRECONDITIONS (infer the latent states that set up the unsafe acts)
-    raw1b = _call_ollama(model_name, SYSTEM_TASK1, _build_precond_prompt(row, unsafe))
+    raw1b = _call_ollama(model_name, SYSTEM_TASK1, _build_precond_prompt(row, unsafe),
+                         schema=PRECOND_FORMAT)
     parsed1b = _extract_json(raw1b)
     precond = _validate_classifications(
         parsed1b.get("hfacs_classifications") if isinstance(parsed1b, dict) else None,
@@ -549,7 +683,8 @@ def extract_row(model_name: str, row: pd.Series, n_fewshot: int = 5) -> dict:
     relationships = []
     if status == "success":
         raw2 = _call_ollama(model_name, SYSTEM_TASK2,
-                            _build_task2_prompt(row, entities))
+                            _build_task2_prompt(row, entities),
+                            schema=RELATION_FORMAT)
         relationships = _validate_relationships(_extract_json(raw2))
 
     return {
@@ -670,6 +805,17 @@ def main():
                         help="Cap generation length (Ollama num_predict). Bounds "
                              "the occasional multi-minute outlier; Task-1/2 JSON "
                              "is short so ~512 is safe.")
+    parser.add_argument("--think", action="store_true",
+                        help="Enable the model's reasoning mode (gemma4, qwen3, "
+                             "...). Off by default: it multiplies runtime and the "
+                             "reasoning text is returned outside message.content, "
+                             "so it never reaches the JSON parser.")
+    parser.add_argument("--no-structured", action="store_true",
+                        help="Disable Ollama structured outputs (format=JSON "
+                             "schema) and fall back to free-form JSON + "
+                             "best-effort parsing. Use to A/B whether "
+                             "constrained decoding changes what a model "
+                             "extracts, or for a model without grammar support.")
     parser.add_argument("--fewshot-from", default=None,
                         help="Reference results CSV (e.g. a zero-shot pass-1) to "
                              "seed the few-shot retrieval corpus for a RAG pass-2. "
@@ -683,9 +829,13 @@ def main():
     _GEN_OPTIONS["num_ctx"] = args.num_ctx
     if args.num_predict is not None:
         _GEN_OPTIONS["num_predict"] = args.num_predict
+    global _STRUCTURED, _THINK
+    _STRUCTURED = not args.no_structured
+    _THINK = args.think
     model_name = _resolve_model(args.model)
-    logging.info("Using model: %s (num_ctx=%d, sleep=%.1fs)",
-                 model_name, args.num_ctx, args.sleep)
+    logging.info("Using model: %s (num_ctx=%d, sleep=%.1fs, structured=%s, "
+                 "think=%s)", model_name, args.num_ctx, args.sleep,
+                 _STRUCTURED, _THINK)
 
     df = pd.read_csv(args.input, dtype=str)
     if args.split == "train":
