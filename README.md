@@ -1,6 +1,6 @@
 # GraphRAG-Causal
 
-**Predicting the HFACS causal chain of commercial aviation accidents, with LLM text-mining, a Neo4j knowledge graph, and retrieval-augmented priors.**
+**Predicting the HFACS causal chain of commercial aviation accidents, with LLM text-mining, a Neo4j knowledge graph, and retrieval-augmented few-shot exemplars.**
 
 This document is written for someone joining the project cold. It covers what the
 system is trying to do, how each piece works, what the data is, where the numbers
@@ -32,16 +32,23 @@ Concretely the system:
 3. **Trains a causal-chain model** whose structure mirrors the HFACS DAG:
    `context → Preconditions → Unsafe Acts → Severity`.
 4. **Augments it with retrieval** — for each new event, pull the most similar past
-   events out of the KG/FAISS indexes and feed their factor distributions in as soft
-   priors.
-5. **Ablates** the retrieval sources against a no-RAG baseline to measure whether the
-   graph/retrieval actually contributes anything.
+   events and feed them to the model as **few-shot exemplars**: each retrieved
+   neighbour enters as an intact (features, labels) pair, not as an averaged summary.
+5. **Ablates** the retrieval sources and augmentation strategies against a no-RAG
+   baseline to measure whether the graph/retrieval actually contributes anything.
 
 ---
 
 ## TL;DR of current state
 
 Held-out test split, `n = 202` NTSB Part-121 events. `C1` is the no-RAG baseline.
+
+> **These are the input-augmentation (prior) results.** The design has since moved to
+> **few-shot exemplars** as the retrieval mechanism — see
+> [Augmentation strategies](#augmentation-strategies--how-retrieval-reaches-the-model).
+> The C9/C10 few-shot conditions have **not been trained yet**, so no numbers exist for
+> them. The table below stands as the completed source ablation and the baseline any
+> new condition must beat.
 
 | Condition | Retrieval sources | B micro-F1 | B bal-acc | C macro-F1 | C kappa | D acc | D kappa |
 |---|---|---|---|---|---|---|---|
@@ -83,7 +90,10 @@ data/
   hfacs_extractor.py     Stage 2   LLM text-mining -> hfacs_results.csv  (HFACS_SCHEMA lives here)
   kg_builder.py          Stage 3   Neo4j KG + asias/asrs/ntsb_kg FAISS indexes
   ntsbdataloader.py      Stage 4   corpus -> tensors; label spaces; train/val/test split
+                                   (FewShotSource: retrieved exemplars live here)
   rag_retriever.py       Stage 5   hybrid FAISS + Cypher retrieval -> soft priors
+                                   (legacy input-augmentation path)
+  compare_extractions.py           per-tier prevalence of two extraction runs
   hfacs_analysis.py      figures: extraction distributions / co-occurrence / coverage
   hfacs_tier_counts.py   figure:  event counts per HFACS tier
 models/
@@ -91,20 +101,28 @@ models/
   lstm/eval.py           Stage 6   cross-condition evaluation -> results/*.csv + figures
   lstm/test.py           single-checkpoint test-split metrics
   lstm/val.py            single-checkpoint validation-split metrics
+  lstm/ensemble.py       Stage 6   RAG-as-a-model, blended at alpha tuned on val
   causal_discovery.py    PC algorithm vs the theoretical HFACS DAG
   eval_utils.py          shared plotting for Stage 6
 select_subset.py         curates the per-source subsets (and the disjoint KG slice)
 eval_lstm.py             single-checkpoint eval + figure (see the caveat in §11)
 system_eval.py           end-to-end inspection of a few records — read this first
 visualize.py             DAG schema, data quality, KG figures
-results/                 c1.pt ... c8.pt checkpoints, eval_summary.csv, McNemar tables
+results/                 c1.pt ... c10.pt checkpoints, eval_summary.csv, McNemar tables
 figures/                 all generated PNGs
 ```
 
 **If you are new: run `python system_eval.py --records 3` first.** It walks three real
-records through every stage — record → extracted HFACS labels → few-shot block →
-retrieved neighbours → priors → model output → agreement — and is the fastest way to
+records through every stage — record → extracted HFACS labels → extraction few-shot
+block → retrieved neighbours → model output → agreement — and is the fastest way to
 build a mental model of the pipeline. (It needs a checkpoint; see §11.)
+
+> **Two different things are called "few-shot" in this project.** Stage 2 few-shot is
+> a real LLM prompt block (retrieved narratives + their HFACS labels pasted into the
+> extraction prompt, answering RQ1). Stage 4 few-shot is the neural analogue — an LSTM
+> has no prompt, so retrieved (features, labels) pairs are encoded and fed to the model
+> (answering RQ2). They are separate mechanisms at separate stages; neither implements
+> the other.
 
 ---
 
@@ -319,12 +337,23 @@ step_ctx (8) : employment_qoq, fuel_qoq, revenue_qoq, loadfactor_qoq,
                + the 4 corresponding brackets                    <- macro-economic
 step_b   (5) : visual_condition, light_conditions, time_of_day,
                person_involved, pilot_hours_bracket              <- environment / crew
-[+ RAG   (7)]: precond_prior(3) | unsafe_prior(2) | severity_prior(2)
+
+few-shot     : k exemplars x 13, retrieved from the TRAIN split  <- current design
+               [ the 5 features above | y_B(3) | y_C(2) | y_D(2) | similarity ]
+               encoded by FewShotEncoder -> 32 dims, concatenated onto step_ctx
+
+[legacy]     : precond_prior(3) | unsafe_prior(2) | severity_prior(2) appended to
+               step_b — the input-augmentation path used for C4..C8 (see below)
 ```
 
-**Thirteen structured features, twenty with retrieval. No narrative text reaches the
-model.** The narrative is used to *create* the B/C labels and to *find* neighbours —
-never as an input.
+**Thirteen structured features. No narrative text reaches the model.** The narrative is
+used to *create* the B/C labels and to *find* neighbours — never as an input.
+
+The exemplar block is where retrieval now enters. Note what it does and does not add:
+its five feature columns are the *same five* the model already sees for the query, so
+the new information is the neighbours' labels **plus the pairing** — which features went
+with which label. That pairing is the entire difference from a prior, and the reason the
+two are different conditions rather than the same one.
 
 ### Training details
 
@@ -354,17 +383,35 @@ never as an input.
    organizational bracket, SDR maintenance bracket). This *replaced* LLM text-to-Cypher,
    which hallucinated node labels on small models.
 
-Both are min-max normalized to [0,1] and combined 50/50. The top-k events' factors and
-stored severity, weighted by score, become three soft priors appended to `step_b`:
+Both are min-max normalized to [0,1] and combined 50/50.
 
-```
-precondition_prior -> B      unsafe_prior -> C      severity_prior -> D
-```
+### Augmentation strategies — how retrieval reaches the model
 
-Any failure at any point (Neo4j down, FAISS missing, bad Cypher) silently returns
-**uniform** priors — training never breaks. The dataloader prints how many records got
-a *non-uniform* prior per head, which is the honest measure of whether retrieval is
-carrying signal. Watch that line.
+Three ways, per the project spec. They are independent and can be combined.
+
+| | mechanism | code | status |
+|---|---|---|---|
+| **Prompt** *(current design)* | k retrieved neighbours enter as intact **(features, labels) exemplars**, encoded by `FewShotEncoder` onto the context root | `FewShotSource`, `--fewshot-k` | **primary** |
+| **Input** *(legacy)* | top-k neighbours collapsed into 7 soft priors appended to `step_b` | `_retrieve_priors` | retained for C4–C8 reproduction |
+| **Ensemble** | retrieval as a standalone predictor, blended with the model at weight α tuned on validation | `models/lstm/ensemble.py` | available |
+
+**The project now uses few-shot exemplars, not priors.** A prior is the neighbours'
+label distribution with the features averaged away; an exemplar keeps feature and label
+bound together, so the model can learn a locally-weighted mapping instead of a global
+base rate. The prior path is kept in the code because C1–C8 are a published ablation
+and must stay reproducible — it is not the design going forward.
+
+Exemplars are drawn from the **NTSB train split only**, self-excluded, the same
+discipline as `LOFORetriever`. ASIAS/ASRS are deliberately excluded as exemplar sources:
+their label space differs (ASIAS severity is `ignore_index`), so exemplars from them
+would teach the model from labels it is never scored on.
+
+Any retrieval failure (Neo4j down, FAISS missing, bad Cypher) degrades silently —
+uniform priors on the legacy path, zero-filled and masked-out exemplars on the few-shot
+path. Training never breaks, which means **a silent failure looks like a working run**.
+The dataloader prints per-record coverage for both (`RAG priors non-uniform: …` and
+`Few-shot exemplars: n/N records got >=1`). Watch those lines; they are the honest
+measure of whether retrieval is carrying anything.
 
 ---
 
@@ -376,6 +423,9 @@ the same held-out test split and writes `results/eval_summary.csv`,
 
 ### Conditions
 
+**Input augmentation (priors) — the completed source ablation.** These produced the
+numbers in the TL;DR table.
+
 | | retrieval sources | question it answers |
 |---|---|---|
 | C1 | none | structured baseline |
@@ -384,6 +434,26 @@ the same held-out test split and writes `results/eval_summary.csv`,
 | C6 | ASRS only | is out-of-distribution incident data enough? |
 | C7 | NTSB-LOFO only | is in-distribution retrieval the whole story? |
 | C8 | all three, `--no-factor-priors` | do the *LLM-mined factors* matter, or just the structured severity? |
+
+**Prompt augmentation (few-shot) — the current design. Not yet run; no results exist
+for these conditions.**
+
+| | configuration | question it answers |
+|---|---|---|
+| C9 | `--fewshot-k 5`, no priors | do exemplars work on their own? |
+| C10 | `--fewshot-k 5 --rag-strategy hybrid` | do exemplars add anything on top of priors? |
+
+C9 is the headline condition for the new design: retrieval enters *only* as exemplars.
+C10 exists to test whether the two augmentation paths are redundant — if C10 ≈ C9, the
+priors were contributing nothing the exemplars don't already carry, which would be the
+cleanest justification for dropping them.
+
+One thing to watch on C9. Head D is the only head that currently works, and it works
+because the severity prior hands the model a pre-aggregated statistic (C7/C8 ≈ 0.75
+accuracy). The exemplar rows carry the same information in their `y_D` columns, but the
+model must now *learn* the aggregation from 710 training records rather than being given
+it. If D drops sharply in C9 but holds in C10, that inductive bias is the reason, and it
+is worth reporting rather than tuning away.
 
 Metrics per head: F1 (micro for the multi-label B, macro for C/D), accuracy, balanced
 accuracy, Cohen's kappa, support, and a **generalization error** = train-minus-test on
@@ -449,7 +519,18 @@ python data/kg_builder.py --source both
 python data/kg_builder.py --faiss-only
 
 # Stage 4 - train the conditions
+#   C1 is the baseline every condition is measured against.
 python models/lstm/train.py --input data/ntsb_clean.csv --save-path results/c1.pt
+
+#   CURRENT DESIGN — prompt augmentation (few-shot exemplars, no priors)
+python models/lstm/train.py --input data/ntsb_clean.csv --fewshot-k 5 \
+       --save-path results/c9.pt
+#   C10 adds priors on top, to test whether the two paths are redundant
+python models/lstm/train.py --input data/ntsb_clean.csv --fewshot-k 5 \
+       --rag-strategy hybrid --save-path results/c10.pt
+
+#   LEGACY — the input-augmentation (prior) source ablation behind the TL;DR table.
+#   Kept reproducible; not the design going forward.
 python models/lstm/train.py --input data/ntsb_clean.csv --rag-strategy hybrid \
        --save-path results/c4.pt
 python models/lstm/train.py --input data/ntsb_clean.csv --rag-strategy hybrid \
@@ -459,6 +540,7 @@ python models/lstm/train.py --input data/ntsb_clean.csv --rag-strategy hybrid \
 
 # Stage 5/6 - evaluate everything
 python models/lstm/eval.py --input data/ntsb_clean.csv
+python models/lstm/ensemble.py --checkpoint results/c9.pt --fewshot-k 5
 python models/causal_discovery.py --input data/ntsb_clean.csv
 
 # Figures + inspection

@@ -127,13 +127,51 @@ def _prior_layout(n_B, n_C, n_D, step_b_dim):
     return has, b_in, uns, sev, (n_C if has else 0), (n_D if has else 0)
 
 
+class FewShotEncoder(nn.Module):
+    """Encodes k retrieved labelled exemplars into one conditioning vector.
+
+    Spec 2.3 "prompt augmentation: few-shot examples for LSTM sequence modeling".
+    An LSTM has no prompt, so the analogue is to let the model READ a sequence of
+    (features, labels) pairs before predicting — in-context learning by
+    architecture rather than by prompt. Each exemplar is a retrieved train
+    neighbour; the sequence is encoded with an LSTM (hence "sequence modeling")
+    and masked-mean-pooled, so padding and empty retrievals contribute nothing.
+
+    This differs from the RAG priors in what it preserves. A prior is the
+    neighbours' label distribution with the features averaged away; an exemplar
+    keeps feature and label bound together, which is what lets a shot teach a
+    mapping rather than a base rate.
+    """
+
+    def __init__(self, fewshot_dim: int, out_dim: int = 32, dropout: float = 0.1):
+        super().__init__()
+        self.out_dim = out_dim
+        self.lstm = nn.LSTM(fewshot_dim, out_dim, batch_first=True)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, fewshot, fewshot_mask):
+        # fewshot [batch, k, dim]; mask [batch, k] (1 = real exemplar)
+        if fewshot is None or fewshot.numel() == 0 or fewshot.size(1) == 0:
+            return torch.zeros(fewshot.size(0) if fewshot is not None else 0,
+                               self.out_dim, device=fewshot.device)
+        out, _ = self.lstm(fewshot)                       # [batch, k, out_dim]
+        m = fewshot_mask.unsqueeze(-1)                    # [batch, k, 1]
+        denom = m.sum(1).clamp(min=1.0)                   # no exemplars -> zeros
+        pooled = (out * m).sum(1) / denom
+        return self.drop(pooled)
+
+
 class HFACSCausalLSTM(nn.Module):
     """Causal LSTM over the DAG: economic-context root (step_ctx) seeds
     B(Preconditions) -> C(Unsafe Acts) -> D(Severity). RAG priors when present
-    (precond->B, unsafe->C, severity->D) enter via step_b. See module docstring."""
+    (precond->B, unsafe->C, severity->D) enter via step_b. Few-shot exemplars,
+    when enabled, are encoded and concatenated onto the CONTEXT ROOT so they
+    condition the whole chain without disturbing the per-head prior structure.
+    See module docstring."""
 
     def __init__(self, hidden_size, n_B, n_C, n_D,
-                 step_ctx_dim, step_b_dim, dropout=0.2):
+                 step_ctx_dim, step_b_dim, dropout=0.2,
+                 fewshot_dim=0, fewshot_out=32):
         super().__init__()
         self.hidden_size = hidden_size
         self.env_slice = ENV_SLICE                          # visual, light, tod (3)
@@ -141,7 +179,13 @@ class HFACSCausalLSTM(nn.Module):
         (self.has_priors, self._b_in, self.unsafe_slice, self.sev_slice,
          c_extra, d_extra) = _prior_layout(n_B, n_C, n_D, step_b_dim)
 
-        self.cell_ctx = nn.LSTMCell(step_ctx_dim, hidden_size)   # context root (no head)
+        # fewshot_dim=0 -> no encoder, and step_ctx_dim is unchanged, so existing
+        # C1..C8 checkpoints load and behave identically.
+        self.fewshot_enc = FewShotEncoder(fewshot_dim, fewshot_out, dropout) \
+            if fewshot_dim > 0 else None
+        ctx_in = step_ctx_dim + (fewshot_out if fewshot_dim > 0 else 0)
+
+        self.cell_ctx = nn.LSTMCell(ctx_in, hidden_size)   # context root (no head)
         self.cell_b = nn.LSTMCell(self._b_in, hidden_size)
         self.cell_c = nn.LSTMCell(hidden_size, hidden_size)
         self.cell_d = nn.LSTMCell(hidden_size, hidden_size)
@@ -155,9 +199,12 @@ class HFACSCausalLSTM(nn.Module):
         self.head_c = nn.Linear(hidden_size, n_C)
         self.head_d = nn.Linear(hidden_size, n_D)
 
-    def forward(self, step_ctx, step_b):
+    def forward(self, step_ctx, step_b, fewshot=None, fewshot_mask=None):
         batch = step_b.size(0)
         zeros = lambda: torch.zeros(batch, self.hidden_size, device=step_b.device)
+        if self.fewshot_enc is not None:
+            step_ctx = torch.cat([step_ctx,
+                                  self.fewshot_enc(fewshot, fewshot_mask)], 1)
         hCtx, cCtx = self.cell_ctx(step_ctx, (zeros(), zeros()))
 
         # B <- base step_b (+ precond prior), seeded by the context root
@@ -190,7 +237,8 @@ class HFACSCausalSCM(nn.Module):
     — override a node's output and propagate."""
 
     def __init__(self, hidden_size, n_B, n_C, n_D,
-                 step_ctx_dim, step_b_dim, dropout=0.2):
+                 step_ctx_dim, step_b_dim, dropout=0.2,
+                 fewshot_dim=0, fewshot_out=32):
         super().__init__()
         self.env_slice = ENV_SLICE
         self.oper_slice = OPER_SLICE
@@ -201,11 +249,19 @@ class HFACSCausalSCM(nn.Module):
             return nn.Sequential(nn.Linear(d_in, hidden_size), nn.ReLU(),
                                  nn.Dropout(dropout), nn.Linear(hidden_size, d_out))
 
-        self.f_B = mlp(step_ctx_dim + self._b_in, n_B)        # B <- context + base(+precond)
+        # Exemplars enter on the context (root) equation, matching the LSTM variant.
+        self.fewshot_enc = FewShotEncoder(fewshot_dim, fewshot_out, dropout) \
+            if fewshot_dim > 0 else None
+        ctx_in = step_ctx_dim + (fewshot_out if fewshot_dim > 0 else 0)
+
+        self.f_B = mlp(ctx_in + self._b_in, n_B)              # B <- context + base(+precond)
         self.f_C = mlp(n_B + 3 + 2 + c_extra, n_C)            # C <- soft_B|env|oper|unsafe_prior
         self.f_D = mlp(n_C + n_B + 3 + d_extra, n_D)          # D <- soft_C|soft_B|env|sev_prior
 
-    def forward(self, step_ctx, step_b):
+    def forward(self, step_ctx, step_b, fewshot=None, fewshot_mask=None):
+        if self.fewshot_enc is not None:
+            step_ctx = torch.cat([step_ctx,
+                                  self.fewshot_enc(fewshot, fewshot_mask)], 1)
         logits_B = self.f_B(torch.cat([step_ctx, step_b[:, :self._b_in]], 1))
         soft_B = torch.sigmoid(logits_B).detach()
         env = step_b[:, self.env_slice]
@@ -230,6 +286,7 @@ def make_model(config: dict):
     (default) or 'scm'. Backward-compatible: missing 'arch' -> lstm."""
     cfg = dict(config)
     arch = cfg.pop("arch", "lstm")
+    cfg.pop("fewshot_k", None)      # bookkeeping for eval, not a model argument
     return _ARCHS[arch](**cfg)
 
 
@@ -247,11 +304,12 @@ def _joint_loss(logits, targets, crits):
 def train_epoch(model, loader, optimizer, crits, device):
     model.train()
     total = 0.0
-    for step_ctx, step_b, yB, yC, yD in loader:
+    for step_ctx, step_b, yB, yC, yD, fs, fsm in loader:
         step_ctx, step_b = step_ctx.to(device), step_b.to(device)
+        fs, fsm = fs.to(device), fsm.to(device)
         ys = [t.to(device) for t in (yB, yC, yD)]
         optimizer.zero_grad()
-        loss = _joint_loss(model(step_ctx, step_b), ys, crits)
+        loss = _joint_loss(model(step_ctx, step_b, fs, fsm), ys, crits)
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
@@ -287,9 +345,10 @@ def evaluate(model, loader, device, thresholds=None):
     aB, aC, aD = [], [], []
     pB, pC, pD = [], [], []
     with torch.no_grad():
-        for step_ctx, step_b, yB, yC, yD in loader:
+        for step_ctx, step_b, yB, yC, yD, fs, fsm in loader:
             step_ctx, step_b = step_ctx.to(device), step_b.to(device)
-            lB, lC, lD = model(step_ctx, step_b)
+            fs, fsm = fs.to(device), fsm.to(device)
+            lB, lC, lD = model(step_ctx, step_b, fs, fsm)
             pB.append(_apply_thr(lB, thr.get("B")))
             pC.extend(lC.argmax(1).cpu().tolist())
             pD.extend(lD.argmax(1).cpu().tolist())
@@ -313,9 +372,10 @@ def tune_thresholds(model, loader, device, grid=None):
     probs = {k: [] for k in _ML_KEYS}
     truth = {k: [] for k in _ML_KEYS}
     with torch.no_grad():
-        for step_ctx, step_b, yB, yC, yD in loader:
+        for step_ctx, step_b, yB, yC, yD, fs, fsm in loader:
             step_ctx, step_b = step_ctx.to(device), step_b.to(device)
-            lB, lC, lD = model(step_ctx, step_b)
+            fs, fsm = fs.to(device), fsm.to(device)
+            lB, lC, lD = model(step_ctx, step_b, fs, fsm)
             for key, logits, y in (("B", lB, yB),):       # only B is multi-label
                 probs[key].append(torch.sigmoid(logits).cpu().numpy())
                 truth[key].append(y.cpu().numpy())
@@ -353,11 +413,19 @@ def train_model(train_loader, val_loader, encoders, hidden_size=128, lr=1e-4,
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Infer dims from the first batch — never hardcoded.
-    s_ctx, s_b, *_ = next(iter(train_loader))
+    # Infer dims from the first batch — never hardcoded. fewshot is [batch, k, dim];
+    # k == 0 means exemplars are disabled, so fewshot_dim stays 0 and no encoder is
+    # built (keeping C1..C8 bit-identical).
+    s_ctx, s_b, _yb, _yc, _yd, s_fs, _fsm = next(iter(train_loader))
+    fewshot_dim = int(s_fs.shape[2]) if s_fs.dim() == 3 and s_fs.shape[1] > 0 else 0
     config = dict(arch=arch, hidden_size=hidden_size,
                   n_B=encoders.n_B, n_C=encoders.n_C, n_D=encoders.n_severity,
-                  step_ctx_dim=s_ctx.shape[1], step_b_dim=s_b.shape[1], dropout=dropout)
+                  step_ctx_dim=s_ctx.shape[1], step_b_dim=s_b.shape[1], dropout=dropout,
+                  fewshot_dim=fewshot_dim,
+                  # k is not a model hyperparameter (the encoder handles any
+                  # sequence length) but eval must rebuild the SAME exemplar
+                  # count, so it is recorded here.
+                  fewshot_k=int(s_fs.shape[1]) if fewshot_dim else 0)
     model = make_model(config).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -375,10 +443,11 @@ def train_model(train_loader, val_loader, encoders, hidden_size=128, lr=1e-4,
         model.eval()
         vtotal = 0.0
         with torch.no_grad():
-            for step_ctx, step_b, yB, yC, yD in val_loader:
+            for step_ctx, step_b, yB, yC, yD, fs, fsm in val_loader:
                 step_ctx, step_b = step_ctx.to(device), step_b.to(device)
+                fs, fsm = fs.to(device), fsm.to(device)
                 ys = [t.to(device) for t in (yB, yC, yD)]
-                vtotal += _joint_loss(model(step_ctx, step_b), ys, crits).item()
+                vtotal += _joint_loss(model(step_ctx, step_b, fs, fsm), ys, crits).item()
         val_loss = vtotal / max(len(val_loader), 1)
         history["val_loss"].append(val_loss)
         scheduler.step(val_loss)
@@ -472,6 +541,12 @@ def main():
     parser.add_argument("--no-factor-priors", dest="factor_priors", action="store_false",
                         help="C8: disable LLM-mined HFACS factor priors (held uniform); "
                              "keep retrieval + structured severity-outcome prior.")
+    parser.add_argument("--fewshot-k", type=int, default=0,
+                        help="C9: prompt augmentation. Retrieve k labelled train "
+                             "exemplars per record and encode them onto the context "
+                             "root (see FewShotEncoder). 0 disables. Independent of "
+                             "--rag-strategy: exemplars and priors can be used "
+                             "together or separately.")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -482,9 +557,11 @@ def main():
 
     train_loader, val_loader, test_loader, encoders = get_dataloaders(
         filepath=args.input, batch_size=args.batch_size, retriever=retriever,
-        limit=args.limit)
+        limit=args.limit, fewshot_k=args.fewshot_k)
 
     cond = "RAG " + args.rag_strategy if retriever else "C1 (no RAG)"
+    if args.fewshot_k:
+        cond += f" + few-shot k={args.fewshot_k}"
     print("=" * 60)
     print(f"Arch: {args.arch} | Condition: {cond}")
     print(f"Heads — B:{encoders.n_B} C:{encoders.n_C} D:{encoders.n_severity}  "

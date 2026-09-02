@@ -45,7 +45,7 @@ sys.path.insert(0, os.path.join(_ROOT, "data"))
 import ntsbdataloader as N                              # noqa: E402
 from ntsbdataloader import (NTSBSequenceDataset, NTSBEncoders, load_and_join,   # noqa: E402
                             _split, PRECOND_SUBS, UNSAFE_SUBS, N_B, N_C,
-                            ECON_DIM, STEP_B_BASE)
+                            ECON_DIM, STEP_B_BASE, FewShotSource)
 from models.lstm.train import make_model, evaluate  # noqa: E402
 from models import eval_utils as EU                     # noqa: E402
 
@@ -68,6 +68,11 @@ CONDITIONS = [
     dict(name="C8", ckpt="c8.pt", strategy="hybrid",                        # all 3, no text-
          kw=dict(asias_weight=0.34, asrs_weight=0.33, ntsb_weight=0.33,      # mined factor
                  factor_priors=False)),                                     # priors (sev only)
+    # Spec 2.3 prompt augmentation. C9 isolates exemplars (no priors at all);
+    # C10 combines them with full hybrid retrieval.
+    dict(name="C9", ckpt="c9.pt", strategy=None, kw={}),                    # few-shot only
+    dict(name="C10", ckpt="c10.pt", strategy="hybrid",                      # few-shot + priors
+         kw=dict(asias_weight=0.34, asrs_weight=0.33, ntsb_weight=0.33)),
 ]
 
 
@@ -75,8 +80,24 @@ CONDITIONS = [
 # Inference / metrics
 # ---------------------------------------------------------------------------
 
-def _loader(df, encoders, retriever, batch):
-    ds = NTSBSequenceDataset(df, encoders, retriever=retriever)
+_FEWSHOT_SRC = None
+
+
+def _fewshot_source(df_train, encoders):
+    """Build the exemplar source once and reuse it across conditions (each build
+    re-encodes the whole train split with SBERT)."""
+    global _FEWSHOT_SRC
+    if _FEWSHOT_SRC is None:
+        _FEWSHOT_SRC = FewShotSource(df_train, encoders)
+    return _FEWSHOT_SRC
+
+
+def _loader(df, encoders, retriever, batch, fewshot_source=None, fewshot_k=0):
+    """Build an eval loader. `fewshot_*` must be supplied for checkpoints trained
+    with exemplars (config['fewshot_dim'] > 0), or the model silently receives
+    empty exemplars and its context root is fed zeros."""
+    ds = NTSBSequenceDataset(df, encoders, retriever=retriever,
+                             fewshot_source=fewshot_source, fewshot_k=fewshot_k)
     return DataLoader(ds, batch_size=batch, shuffle=False)
 
 
@@ -87,9 +108,10 @@ def infer_probs(model, loader, device):
     pB, pC, pD = [], [], []
     inputs = []
     with torch.no_grad():
-        for s_ctx, s_b, *_ in loader:
+        for s_ctx, s_b, _yb, _yc, _yd, fs, fsm in loader:
             s_ctx, s_b = s_ctx.to(device), s_b.to(device)
-            lB, lC, lD = model(s_ctx, s_b)
+            fs, fsm = fs.to(device), fsm.to(device)
+            lB, lC, lD = model(s_ctx, s_b, fs, fsm)
             pB.append(torch.sigmoid(lB).cpu().numpy())
             pC.append(torch.softmax(lC, 1).cpu().numpy())
             pD.append(torch.softmax(lD, 1).cpu().numpy())
@@ -321,7 +343,13 @@ def main():
         model = make_model(cfg).to(device)
         model.load_state_dict(ck["state_dict"]); model.eval()
 
-        test_loader = _loader(df_test, encoders, retr, args.batch_size)
+        # Checkpoints trained with exemplars must be evaluated with them; the
+        # source is the train split, exactly as during training.
+        fs_k = int(cfg.get("fewshot_k", 0))
+        fs_src = _fewshot_source(df_train, encoders) if fs_k else None
+
+        test_loader = _loader(df_test, encoders, retr, args.batch_size,
+                              fewshot_source=fs_src, fewshot_k=fs_k)
         aB, aC, aD, pB, pC, pD = evaluate(model, test_loader, device, thr)
 
         n_C = cfg["n_C"]
@@ -334,7 +362,8 @@ def main():
 
         # generalization error per step (train − test, same thresholds + metric)
         tr_sub = df_train.head(args.train_sample)
-        tr_loader = _loader(tr_sub, encoders, retr, args.batch_size)
+        tr_loader = _loader(tr_sub, encoders, retr, args.batch_size,
+                            fewshot_source=fs_src, fewshot_k=fs_k)
         taB, taC, taD, tpB, tpC, tpD = evaluate(model, tr_loader, device, thr)
         row["B_generror"] = float(_f1_micro(taB, tpB) - row["B_F1"])
         row["C_generror"] = float(_f1_macro_sev(taC, tpC, n_C) - row["C_F1"])

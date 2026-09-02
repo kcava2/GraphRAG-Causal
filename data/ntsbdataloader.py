@@ -215,6 +215,102 @@ class NTSBEncoders:
 
 
 # ---------------------------------------------------------------------------
+# Few-shot exemplar source (spec 2.3 "prompt augmentation")
+# ---------------------------------------------------------------------------
+
+def encode_step_b_base(df: pd.DataFrame, e: "NTSBEncoders") -> np.ndarray:
+    """The 5 base step_b features. Shared by the dataset and the few-shot source
+    so a query and an exemplar are always encoded identically."""
+    return np.column_stack([
+        e._safe_transform(e.enc_visual, df["visual_condition"]),
+        e._safe_transform(e.enc_light, df["light_conditions"]),
+        _time_of_day(df["light_conditions"]),
+        e._safe_transform(e.enc_person, df["person_involved"]),
+        e._safe_transform(e.enc_pilot_hours, df["pilot_hours_bracket"]),
+    ]).astype("float32")
+
+
+# [base features (5) | y_B (3) | y_C one-hot (2) | y_D one-hot (2) | similarity (1)]
+FEWSHOT_DIM = STEP_B_BASE + N_B + N_C + 2 + 1
+
+
+class FewShotSource:
+    """Retrieves labelled EXEMPLARS — (features, labels) pairs — for a query.
+
+    This is the neural analogue of few-shot prompting: rather than collapsing the
+    neighbours into an averaged prior (what `_retrieve_priors` does), each
+    neighbour is kept intact as an input/output pair, and the model reads the
+    whole set. The averaged prior discards which features produced which label;
+    an exemplar keeps that association, which is the entire point of a shot.
+
+    **Leakage discipline.** The source is the NTSB TRAIN split only, and a query
+    never retrieves itself (`exclude_id`). A val/test record is not in the source
+    at all, and a train record cannot see its own label. This mirrors
+    `LOFORetriever` exactly — exemplars are drawn from the same pool, and for the
+    same reason. ASIAS/ASRS are deliberately NOT exemplar sources: their label
+    space differs (ASIAS severity is ignore_index) and mixing them would teach the
+    model from labels it is never scored on.
+    """
+
+    def __init__(self, source_df: pd.DataFrame, encoders: "NTSBEncoders"):
+        df = source_df.reset_index(drop=True)
+        self.ids = df["ev_id"].astype(str).tolist()
+        self._texts = df["combined_text"].astype(str).fillna("").tolist()
+
+        base = encode_step_b_base(df, encoders)
+        y_B = np.stack([_multihot(s, PRECOND_SUBS) for s in df["_pre"]]).astype("float32")
+        y_C = np.array([1 if UNSAFE_VIOLATION_TIER in s else 0 for s in df["_uns"]])
+        y_D = pd.to_numeric(df["severity_class"], errors="coerce").fillna(0).astype(int).to_numpy()
+
+        onehot = lambda v, n: np.eye(n, dtype="float32")[np.clip(v, 0, n - 1)]
+        # Columns are laid out to match FEWSHOT_DIM; similarity is filled per query.
+        self.matrix = np.concatenate(
+            [base, y_B, onehot(y_C, N_C), onehot(y_D, 2)], axis=1).astype("float32")
+
+        self._sbert = None
+        self._index = None
+        self._build_index()
+
+    def _build_index(self):
+        try:
+            import faiss
+            from sentence_transformers import SentenceTransformer
+            self._sbert = SentenceTransformer(SBERT_MODEL)
+            emb = np.asarray(self._sbert.encode(self._texts, normalize_embeddings=True),
+                             dtype="float32")
+            self._index = faiss.IndexFlatIP(emb.shape[1])
+            self._index.add(emb)
+            print(f"  Few-shot source: indexed {len(self.ids)} train exemplars.")
+        except Exception as exc:
+            print(f"  Few-shot source: index build failed ({exc}) — exemplars disabled.")
+            self._index = None
+
+    def lookup(self, text: str, exclude_id: str, k: int):
+        """-> (exemplars [k, FEWSHOT_DIM], mask [k]). Zero-padded when short."""
+        out = np.zeros((k, FEWSHOT_DIM), dtype="float32")
+        mask = np.zeros(k, dtype="float32")
+        if self._index is None or not str(text).strip():
+            return out, mask
+        try:
+            emb = np.asarray(self._sbert.encode([str(text)], normalize_embeddings=True),
+                             dtype="float32")
+            sims, idx = self._index.search(emb, min(k + 1, len(self.ids)))
+            used = 0
+            for s, i in zip(sims[0], idx[0]):
+                if i < 0 or i >= len(self.ids) or self.ids[i] == str(exclude_id):
+                    continue                                  # self-exclusion (LOFO)
+                out[used, :-1] = self.matrix[i]
+                out[used, -1] = float(s)                      # similarity as a feature
+                mask[used] = 1.0
+                used += 1
+                if used >= k:
+                    break
+        except Exception:
+            pass                                              # zeros = "no exemplars"
+        return out, mask
+
+
+# ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
 
@@ -228,7 +324,7 @@ class NTSBSequenceDataset(Dataset):
     upper HFACS tier is represented by structured economic context (step_ctx),
     which seeds the chain  context -> B(Preconditions) -> C(Unsafe) -> D(Severity).
 
-    __getitem__ -> (step_ctx, step_b, y_B, y_C, y_D)
+    __getitem__ -> (step_ctx, step_b, y_B, y_C, y_D, fewshot, fewshot_mask)
         step_ctx : [emp_qoq, fuel_qoq, revenue_qoq, loadfactor_qoq,
                     emp_bracket, fuel_bracket, revenue_bracket, loadfactor_bracket]
                    (organizational/economic pressure, QoQ-only)
@@ -238,9 +334,13 @@ class NTSBSequenceDataset(Dataset):
         y_C      : binary class index (long; 1 = violation, 0 = error/none)
         y_D      : binary severity class index (long; high/low) — NTSB only; ASIAS
                    rows carry -100 (ignore_index) so they don't train/eval D
+        fewshot  : [k, FEWSHOT_DIM] retrieved labelled exemplars, empty when
+                   fewshot_k=0 (see FewShotSource)
+        fewshot_mask : [k] 1.0 for a real exemplar, 0.0 for padding
     """
 
-    def __init__(self, df: pd.DataFrame, encoders: NTSBEncoders, retriever=None):
+    def __init__(self, df: pd.DataFrame, encoders: NTSBEncoders, retriever=None,
+                 fewshot_source: "FewShotSource | None" = None, fewshot_k: int = 0):
         e = encoders
         df = df.reset_index(drop=True)
 
@@ -282,21 +382,42 @@ class NTSBSequenceDataset(Dataset):
         ]).astype("float32")
 
         # ---- step_b: environmental/person features (sky_conditions dropped) ----
-        step_b = np.column_stack([
-            e._safe_transform(e.enc_visual, df["visual_condition"]),
-            e._safe_transform(e.enc_light, df["light_conditions"]),
-            _time_of_day(df["light_conditions"]),
-            e._safe_transform(e.enc_person, df["person_involved"]),
-            e._safe_transform(e.enc_pilot_hours, df["pilot_hours_bracket"]),
-        ]).astype("float32")
+        step_b = encode_step_b_base(df, e)
 
         # ---- optional RAG priors appended to step_b: precond | unsafe | severity ----
+        # Kept as a separate attribute too, so the ensemble (spec 2.3) can read the
+        # retrieval-only prediction without re-running retrieval.
+        self.rag_priors = None
         if retriever is not None:
             pre_p, uns_p, sev_p = self._retrieve_priors(retriever, df, e)
             step_b = np.concatenate([step_b, pre_p, uns_p, sev_p], axis=1).astype("float32")
+            self.rag_priors = {
+                "precondition": torch.tensor(pre_p, dtype=torch.float32),
+                "unsafe": torch.tensor(uns_p, dtype=torch.float32),
+                "severity": torch.tensor(sev_p, dtype=torch.float32),
+            }
 
         self.step_ctx = torch.tensor(step_ctx, dtype=torch.float32)
         self.step_b = torch.tensor(step_b, dtype=torch.float32)
+
+        # ---- optional few-shot exemplars (spec 2.3 "prompt augmentation") ----
+        # Shape [n, k, FEWSHOT_DIM]; k=0 yields an empty tensor so the tuple arity
+        # of __getitem__ never changes and downstream code stays uniform.
+        if fewshot_source is not None and fewshot_k > 0:
+            ex = np.zeros((len(df), fewshot_k, FEWSHOT_DIM), dtype="float32")
+            mk = np.zeros((len(df), fewshot_k), dtype="float32")
+            texts = df["combined_text"].astype(str).fillna("").tolist()
+            ids = df["ev_id"].astype(str).tolist()
+            for i, (t, eid) in enumerate(zip(texts, ids)):
+                ex[i], mk[i] = fewshot_source.lookup(t, eid, fewshot_k)
+            n_with = int((mk.sum(1) > 0).sum())
+            print(f"  Few-shot exemplars: {n_with}/{len(df)} records got >=1 "
+                  f"(k={fewshot_k}).")
+            self.fewshot = torch.tensor(ex, dtype=torch.float32)
+            self.fewshot_mask = torch.tensor(mk, dtype=torch.float32)
+        else:
+            self.fewshot = torch.zeros(len(df), 0, FEWSHOT_DIM, dtype=torch.float32)
+            self.fewshot_mask = torch.zeros(len(df), 0, dtype=torch.float32)
 
     # Columns the Stage-5 retriever needs (narrative + Cypher structural params).
     _RETRIEVE_COLS = ["ev_id", "combined_text", "visual_condition", "light_conditions",
@@ -341,8 +462,11 @@ class NTSBSequenceDataset(Dataset):
         return len(self.y_D)
 
     def __getitem__(self, idx):
+        # Few-shot tensors are appended LAST so existing star-unpacking consumers
+        # (e.g. eval.infer_probs' `s_ctx, s_b, *_`) keep working unchanged.
         return (self.step_ctx[idx], self.step_b[idx],
-                self.y_B[idx], self.y_C[idx], self.y_D[idx])
+                self.y_B[idx], self.y_C[idx], self.y_D[idx],
+                self.fewshot[idx], self.fewshot_mask[idx])
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +522,7 @@ def build_faiss_only(filepath=NTSB_CLEAN, seed=42, test_split=0.2, val_split=0.1
 
 def get_dataloaders(filepath: str = NTSB_CLEAN, test_split=0.2, val_split=0.1,
                     batch_size=32, seed=42, retriever=None, build_faiss=True,
-                    limit=None):
+                    limit=None, fewshot_k: int = 0):
     """
     Returns (train_loader, val_loader, test_loader, encoders).
 
@@ -422,9 +546,16 @@ def get_dataloaders(filepath: str = NTSB_CLEAN, test_split=0.2, val_split=0.1,
     if retriever is not None and hasattr(retriever, "set_source_df"):
         retriever.set_source_df(df_train)        # in-distribution NTSB-LOFO source
 
-    train_set = NTSBSequenceDataset(df_train, encoders, retriever=retriever)
-    val_set = NTSBSequenceDataset(df_val, encoders, retriever=retriever)
-    test_set = NTSBSequenceDataset(df_test, encoders, retriever=None)  # eval.py re-attaches
+    # Few-shot exemplar source: TRAIN SPLIT ONLY, same discipline as LOFO. Built
+    # once and shared, so val/test query the same pool the model trained against.
+    fewshot_source = FewShotSource(df_train, encoders) if fewshot_k > 0 else None
+
+    mk = lambda d, r: NTSBSequenceDataset(d, encoders, retriever=r,
+                                          fewshot_source=fewshot_source,
+                                          fewshot_k=fewshot_k)
+    train_set = mk(df_train, retriever)
+    val_set = mk(df_val, retriever)
+    test_set = mk(df_test, None)                 # eval.py re-attaches the retriever
 
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
