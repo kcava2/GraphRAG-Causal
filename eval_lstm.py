@@ -3,8 +3,9 @@ eval_lstm.py  —  held-out test-set metrics for the trained HFACS causal LSTM
 ============================================================================
 Loads models/lstm/hfacs_lstm.pt and evaluates the TEST split, then writes a
 figure (figures/lstm_eval.png) plus a short console summary:
-  - O/A/B/C (multi-label): micro/macro F1, precision, recall, exact-match, support
+  - B/C (multi-label): micro/macro F1, precision, recall, exact-match, support
   - D (severity, single-class): accuracy, balanced accuracy, macro-F1, confusion
+Org/supervisory is a structured context input, not a predicted head.
 
 Auto-detects C1 vs C4 from the checkpoint dims and builds a retriever for C4.
 Pass the SAME --input you trained on so the encoders/severity classes match.
@@ -31,7 +32,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, "data"))
 sys.path.insert(0, _HERE)
 import ntsbdataloader as N                              # noqa: E402
-from models.lstm.train import HFACSCausalLSTM, evaluate  # noqa: E402
+from models.lstm.train import make_model, evaluate  # noqa: E402
 
 FIG = os.path.join(_HERE, "figures")
 os.makedirs(FIG, exist_ok=True)
@@ -65,7 +66,10 @@ def main():
 
     ckpt = torch.load(args.checkpoint, weights_only=False)
     cfg = ckpt["config"]
-    is_c4 = cfg["step_a_dim"] > N.N_O
+    if "step_ctx_dim" not in cfg:
+        raise SystemExit("Pre-redesign checkpoint — retrain with the current train.py.")
+    thr = ckpt.get("thresholds")
+    is_c4 = cfg["step_b_dim"] > N.STEP_B_BASE   # RAG precond prior enlarges step_b
     cond = "C4 (RAG priors)" if is_c4 else "C1 (no RAG)"
     print(f"Checkpoint: {args.checkpoint}\nCondition: {cond}")
 
@@ -80,14 +84,14 @@ def main():
         retriever=retriever, build_faiss=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = HFACSCausalLSTM(**cfg).to(device)
+    model = make_model(cfg).to(device)
     model.load_state_dict(ckpt["state_dict"]); model.eval()
 
-    aO, aA, aB, aC, aD, pO, pA, pB, pC, pD = evaluate(model, test_loader, device)
+    aB, aC, aD, pB, pC, pD = evaluate(model, test_loader, device, thr)
     n = len(aD)
 
-    heads = ["O Organizational", "A Supervisory", "B Preconditions", "C Unsafe Acts"]
-    mets = [_ml_metrics(*p) for p in ((aO, pO), (aA, pA), (aB, pB), (aC, pC))]
+    heads = ["B Preconditions", "C Unsafe Acts"]
+    mets = [_ml_metrics(*p) for p in ((aB, pB), (aC, pC))]
 
     n_D = cfg["n_D"]
     sev_labels = list(range(n_D))
@@ -110,7 +114,7 @@ def main():
     fig, axes = plt.subplots(2, 2, figsize=(18, 11))
     fig.suptitle(f"HFACS Causal LSTM — test-set evaluation  ({cond}, {n} records)",
                  fontsize=15, fontweight="bold")
-    short = ["O", "A", "B", "C"]
+    short = ["B", "C"]
 
     # (0,0) grouped metric bars
     ax = axes[0, 0]

@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ntsbdataloader as N          # noqa: E402
 import hfacs_extractor as H         # noqa: E402
 from rag_retriever import build_retriever            # noqa: E402
-from models.lstm.train import HFACSCausalLSTM        # noqa: E402
+from models.lstm.train import make_model            # noqa: E402
 
 _SEP = "=" * 78
 
@@ -104,8 +104,10 @@ def main():
 
     # ---- model ----
     ckpt = torch.load(os.path.join("models", "lstm", "hfacs_lstm.pt"), weights_only=False)
-    model = HFACSCausalLSTM(**ckpt["config"]); model.load_state_dict(ckpt["state_dict"]); model.eval()
-    is_c4 = ckpt["config"]["step_a_dim"] > N.N_O          # priors appended?
+    if "step_ctx_dim" not in ckpt["config"]:
+        raise SystemExit("Pre-redesign checkpoint — retrain with the current train.py.")
+    model = make_model(ckpt["config"]); model.load_state_dict(ckpt["state_dict"]); model.eval()
+    is_c4 = ckpt["config"]["step_b_dim"] > N.STEP_B_BASE   # precond prior appended?
 
     # ---- retriever ----
     retriever = None
@@ -125,7 +127,7 @@ def main():
     print(f"\n{_SEP}\nSYSTEM EVALUATION — {len(sample)} records | model={ckpt['config']} "
           f"| RAG={'on' if (retriever and is_c4) else 'off'}\n{_SEP}")
 
-    agg = {"O": [], "A": [], "B": [], "C": [], "sev": []}
+    agg = {"B": [], "C": [], "sev": []}
     for i in range(len(sample)):
         row = sample.iloc[i]
         ev = str(row["ev_id"])
@@ -136,11 +138,11 @@ def main():
               f"emp={row['employment_bracket']} fuel={row['fuel_bracket']}")
         print(f"  narrative: {narrative[:200].replace(chr(10),' ')}...")
 
-        # 1) HFACS extraction truth
-        print("\n  [1] HFACS extraction (multi-label truth from hfacs_results.csv):")
-        for label, col, vocab in (("O org", "_org", N.ORG_SUBS), ("A sup", "_sup", N.SUP_SUBS),
-                                   ("B pre", "_pre", N.PRECOND_SUBS), ("C unsafe", "_uns", N.UNSAFE_SUBS)):
-            print(f"      {label:10}: {_true(row[col], vocab)}")
+        # 1) HFACS extraction truth (B multi-label; C binary violation-vs-error)
+        print("\n  [1] HFACS extraction truth from hfacs_results.csv:")
+        print(f"      {'B pre':10}: {_true(row['_pre'], N.PRECOND_SUBS)}")
+        viol_true = 1 if N.UNSAFE_VIOLATION_TIER in row["_uns"] else 0
+        print(f"      {'C unsafe':10}: violation={viol_true}  (tiers: {sorted(row['_uns'])})")
 
         # 2) Few-shot block
         fb = H.get_ntsb_fewshot_examples(narrative, n=2)
@@ -158,47 +160,42 @@ def main():
                 print(f"      {src} {eid} (sim={sc:.2f}) factors={facs[:4]}")
                 print(f"          {snip}...")
 
-        # 4) RAG priors (slice the appended portion of the step tensors)
-        s_o, s_a, s_b, yO, yA, yB, yC, yD = ds[i]
+        # 4) RAG precondition prior (slice the appended portion of step_b)
+        s_ctx, s_b, yB, yC, yD = ds[i]
         if is_c4:
-            org_p = s_o[7:].numpy(); sup_p = s_a[N.N_O:].numpy(); pre_p = s_b[N.STEP_B_BASE:].numpy()
-            print("\n  [4] RAG priors (appended to LSTM input):")
-            print("      org top:", [(v, round(p, 3)) for v, p in _topk(org_p, N.ORG_SUBS, 3)])
-            print("      sup top:", [(v, round(p, 3)) for v, p in _topk(sup_p, N.SUP_SUBS, 3)])
+            pre_p = s_b[N.STEP_B_BASE:].numpy()
+            print("\n  [4] RAG precondition prior (appended to step_b):")
             print("      pre top:", [(v, round(p, 3)) for v, p in _topk(pre_p, N.PRECOND_SUBS, 3)])
         else:
             print("\n  [4] RAG priors: model is C1 (no priors).")
 
-        # 5) LSTM output — predicted causal chain
+        # 5) LSTM output — predicted causal chain (org/sup is a context input)
         with torch.no_grad():
-            lO, lA, lB, lC, lD = model(s_o.unsqueeze(0), s_a.unsqueeze(0), s_b.unsqueeze(0))
-        pO, pA, pB, pC = (torch.sigmoid(x)[0].numpy() for x in (lO, lA, lB, lC))
+            lB, lC, lD = model(s_ctx.unsqueeze(0), s_b.unsqueeze(0))
+        pB = torch.sigmoid(lB[0]).numpy()
+        pC = torch.softmax(lC[0], 0).numpy()              # [P(error), P(violation)]
         pD = torch.softmax(lD[0], 0).numpy()
         print("\n  [5] LSTM predicted causal chain (probabilities):")
-        print("      O Organizational:", [(v, round(p, 2)) for v, p in _topk(pO, N.ORG_SUBS, 3)])
-        print("      A Supervisory   :", [(v, round(p, 2)) for v, p in _topk(pA, N.SUP_SUBS, 3)])
         print("      B Preconditions :", [(v, round(p, 2)) for v, p in _topk(pB, N.PRECOND_SUBS, 3)])
-        print("      C Unsafe Acts   :", [(v, round(p, 2)) for v, p in _topk(pC, N.UNSAFE_SUBS, 3)])
+        print(f"      C Unsafe Acts   : P(violation)={pC[1]:.2f} -> pred={int(pC.argmax())}")
         print(f"      D Severity      : class {int(pD.argmax())} (probs {pD.round(2).tolist()})")
 
         # 6) agreement (predicted>0.5 vs true)
         def pset(probs, vocab):
             return {vocab[j] for j in range(len(vocab)) if probs[j] > 0.5}
-        jO = _jaccard(pset(pO, N.ORG_SUBS), set(row["_org"]))
-        jA = _jaccard(pset(pA, N.SUP_SUBS), set(row["_sup"]))
         jB = _jaccard(pset(pB, N.PRECOND_SUBS), set(row["_pre"]))
-        jC = _jaccard(pset(pC, N.UNSAFE_SUBS), set(row["_uns"]))
+        jC = float(int(pC.argmax()) == viol_true)         # C is a binary hit now
         sev_true = int(float(row["severity_class"]))
-        sev_hit = int(int(pD.argmax()) == enc.enc_severity.transform([sev_true])[0]
-                      if sev_true in set(enc.enc_severity.classes_) else 0)
+        sev_hit = int(int(pD.argmax()) == enc.enc_severity.transform([str(sev_true)])[0]
+                      if str(sev_true) in set(enc.enc_severity.classes_) else 0)
         print(f"\n  [6] agreement (Jaccard pred>0.5 vs true): "
-              f"O={jO:.2f} A={jA:.2f} B={jB:.2f} C={jC:.2f} | severity_hit={sev_hit}")
-        for k, v in zip(("O", "A", "B", "C", "sev"), (jO, jA, jB, jC, sev_hit)):
+              f"B={jB:.2f} C={jC:.2f} | severity_hit={sev_hit}")
+        for k, v in zip(("B", "C", "sev"), (jB, jC, sev_hit)):
             agg[k].append(v)
 
     print(f"\n{_SEP}\nAGGREGATE over {len(sample)} records (mean):")
-    print("  Jaccard  O={:.2f} A={:.2f} B={:.2f} C={:.2f} | severity_acc={:.2f}".format(
-        *[np.mean(agg[k]) if agg[k] else 0.0 for k in ("O", "A", "B", "C", "sev")]))
+    print("  Jaccard  B={:.2f} C={:.2f} | severity_acc={:.2f}".format(
+        *[np.mean(agg[k]) if agg[k] else 0.0 for k in ("B", "C", "sev")]))
     print("  NOTE: values reflect the smoke-trained model; this tool is for inspection, "
           "not Stage-6 metrics.\n" + _SEP)
 

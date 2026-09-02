@@ -1,9 +1,9 @@
 """
-val.py  —  single-checkpoint VALIDATION-split metrics (reconciled to the 5-head model)
+val.py  —  single-checkpoint VALIDATION-split metrics (3-head model)
 ======================================================================================
 Same as test.py but reports on the VALIDATION split (useful for model selection /
 sanity-checking before the held-out test report). Reuses the eval helpers; calls
-train.evaluate() and unpacks all 10 values.
+train.evaluate() and unpacks all 6 values (B/C multi-label + D severity).
 
 Usage:
   python models/lstm/val.py --input data/ntsb_subset.csv --checkpoint results/c1.pt

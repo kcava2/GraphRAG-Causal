@@ -6,12 +6,18 @@ the PC constraint-based algorithm (causal-learn, chi-square independence test),
 then compares the discovered edges to a feature-level projection of the
 theoretical DAG.
 
-RECONCILED to the multi-label design: the HFACS "group" variables
-(org_climate, supervisory, operator=Preconditions, unsafe) are reduced from the
-multi-label hfacs_json to a single discrete code = the PRIMARY (first listed)
-subcategory in that group (0 = none). All other variables are integer-encoded.
-`sky_conditions` is constant ('UNK') → zero variance; retained for completeness,
-PC results on it are trivial (documented).
+RECONCILED to the CURRENT model (2026-06): `operator` = Preconditions, reduced to
+the PRIMARY (first-present) tier code (0 = none); `violation` = the binary Unsafe
+head (1 if an unsafe_violation tier was extracted, else 0); `severity_class` is the
+binary gravity+damage target (high/low). Economic context is the 4 QoQ brackets
+(employment, fuel, operating revenue, load factor). `maintenance_defect` is the SDR
+reliability bracket (0=unknown,1=low,2=med,3=high) keyed by make+year — included so
+PC can TEST whether maintenance reliability has causal edges to preconditions /
+violations / severity BEFORE we decide to wire SDR into the model.
+
+Severity is NTSB-defined, so the matrix is restricted to NTSB rows (a `_source`
+column, if present, is filtered to NTSB) — ASIAS severity is masked in the model
+and would re-introduce the source confound here.
 
 Outputs:
   results/causal_edge_comparison.csv   per-edge: confirmed | new | missing
@@ -37,84 +43,120 @@ _ROOT = os.path.join(_HERE, "..")
 sys.path.insert(0, _ROOT)
 sys.path.insert(0, os.path.join(_ROOT, "data"))
 from hfacs_extractor import HFACS_SCHEMA                 # noqa: E402
-from ntsbdataloader import (PRECOND_TIERS, UNSAFE_TIERS, NTSB_CLEAN,  # noqa: E402
+from ntsbdataloader import (PRECOND_TIERS, UNSAFE_VIOLATION_TIER, NTSB_CLEAN,  # noqa: E402
                             HFACS_RESULTS)
+from standardize import binarize_severity               # noqa: E402
 from models import eval_utils as EU                      # noqa: E402
 
 RESULTS = os.path.join(_ROOT, "results")
 os.makedirs(RESULTS, exist_ok=True)
 
-FEATURES = ["org_climate", "employment_qoq", "visual_condition", "light_conditions",
-            "sky_conditions", "time_of_day", "person_involved", "pilot_hours_bracket",
-            "supervisory", "operator", "unsafe", "severity_class"]
+FEATURES = ["employment_qoq", "fuel_qoq", "revenue_qoq", "loadfactor_qoq",
+            "maintenance_defect",
+            "visual_condition", "light_conditions", "time_of_day",
+            "person_involved", "pilot_hours_bracket",
+            "operator", "violation", "severity_class"]
 
-# Feature-level projection of the theoretical HFACS DAG onto the 12 variables.
+# Feature-level projection of the model's WIRED structure PLUS the exploratory
+# hypotheses we want PC to adjudicate. 'operator' = Preconditions (B), 'violation' =
+# binary Unsafe head (C), 'severity_class' = binary Severity (D).
 REFERENCE_EDGES = [
-    ("employment_qoq", "org_climate"),
-    ("org_climate", "supervisory"),
-    ("supervisory", "operator"),
-    ("person_involved", "operator"),
+    # --- WIRED: economic context + env + operator -> Preconditions (seeds B) ---
+    ("employment_qoq", "operator"), ("fuel_qoq", "operator"),
+    ("revenue_qoq", "operator"), ("loadfactor_qoq", "operator"),
+    ("visual_condition", "operator"), ("light_conditions", "operator"),
+    ("time_of_day", "operator"), ("person_involved", "operator"),
     ("pilot_hours_bracket", "operator"),
-    ("visual_condition", "operator"),
-    ("light_conditions", "operator"),
-    ("time_of_day", "operator"),
-    ("operator", "unsafe"),
-    ("supervisory", "unsafe"),
-    ("unsafe", "severity_class"),
+    # --- WIRED: Preconditions -> Violation (B->C) + env/operator -> Violation ---
+    ("operator", "violation"),
+    ("visual_condition", "violation"), ("light_conditions", "violation"),
+    ("time_of_day", "violation"), ("person_involved", "violation"),
+    ("pilot_hours_bracket", "violation"),
+    # --- WIRED: Violation -> Severity (C->D) + Preconditions/env -> Severity ---
+    ("violation", "severity_class"), ("operator", "severity_class"),
+    ("visual_condition", "severity_class"), ("light_conditions", "severity_class"),
+    ("time_of_day", "severity_class"),
+    # --- EXPLORATORY: prior PC run suggested a DIRECT economic -> severity edge ---
+    ("employment_qoq", "severity_class"), ("fuel_qoq", "severity_class"),
+    ("revenue_qoq", "severity_class"), ("loadfactor_qoq", "severity_class"),
+    # --- EXPLORATORY (SDR test): does maintenance reliability cause anything? ---
+    ("maintenance_defect", "operator"), ("maintenance_defect", "violation"),
+    ("maintenance_defect", "severity_class"),
 ]
 
 
-def _primary_code(cls: dict, tiers, subs_of) -> int:
-    """First listed subcategory across `tiers` -> 1-based code; 0 if none."""
-    for t in tiers:
-        for s in cls.get(t, []):
-            if s in subs_of:
-                return subs_of[s] + 1
-    return 0
+_SDR_PATH = os.path.join(_ROOT, "data", "sdr_defect_brackets.csv")
+_SDR_ORD = {"low": 1, "medium": 2, "high": 3}
+
+
+def _load_sdr():
+    if not os.path.exists(_SDR_PATH):
+        print(f"  (no {os.path.basename(_SDR_PATH)} — maintenance_defect will be all 0)")
+        return {}
+    t = pd.read_csv(_SDR_PATH, dtype=str)
+    return {(str(r["make"]).upper(), int(float(r["year"]))): r["bracket"]
+            for _, r in t.iterrows()}
+
+
+def _sdr_code(make, year, lut) -> int:
+    """SDR reliability bracket -> ordinal (0 unknown, 1 low, 2 med, 3 high)."""
+    from standardize import normalize_make
+    try:
+        b = lut.get((normalize_make(make), int(float(year))))
+    except (ValueError, TypeError, AttributeError):
+        b = None
+    return _SDR_ORD.get(b, 0)
 
 
 def build_feature_matrix(input_csv=NTSB_CLEAN, hfacs_csv=HFACS_RESULTS):
-    """12 discrete variables from ntsb_clean ⋈ hfacs_results (success rows)."""
+    """Discrete variables from the NTSB rows of input_csv ⋈ hfacs_results."""
     df = pd.read_csv(input_csv, dtype=str)
+    if "_source" in df.columns:                 # severity is NTSB-defined — NTSB only
+        df = df[df["_source"].astype(str).str.upper() == "NTSB"].copy()
     hf = pd.read_csv(hfacs_csv, dtype=str)
     hf = hf[hf["extraction_status"] == "success"][["ev_id", "hfacs_json"]]
     m = df.merge(hf, on="ev_id", how="inner")
     if m.empty:
         raise SystemExit("No NTSB records with successful HFACS extraction — run Stage 2 first.")
 
-    # group -> {subcategory: index}
-    org_idx = {s: i for i, s in enumerate(HFACS_SCHEMA["org_climate"])}
-    sup_idx = {s: i for i, s in enumerate(HFACS_SCHEMA["supervisory"])}
-    pre_idx = {s: i for i, s in enumerate(s for t in PRECOND_TIERS for s in HFACS_SCHEMA[t])}
-    uns_idx = {s: i for i, s in enumerate(s for t in UNSAFE_TIERS for s in HFACS_SCHEMA[t])}
+    # 'operator' = primary (first-present) precondition TIER code (0=none).
+    # 'violation' = binary Unsafe head: 1 if an unsafe_violation tier was extracted.
+    def _primary_tier(cls, tiers):
+        for i, t in enumerate(tiers):
+            if cls.get(t):
+                return i + 1
+        return 0
 
-    org, sup, ope, uns = [], [], [], []
+    lut = _load_sdr()
+    ope, viol = [], []
     for j in m["hfacs_json"]:
         try:
             cls = json.loads(j or "{}")
         except (json.JSONDecodeError, TypeError):
             cls = {}
-        org.append(_primary_code(cls, ["org_climate"], org_idx))
-        sup.append(_primary_code(cls, ["supervisory"], sup_idx))
-        ope.append(_primary_code(cls, PRECOND_TIERS, pre_idx))
-        uns.append(_primary_code(cls, UNSAFE_TIERS, uns_idx))
+        ope.append(_primary_tier(cls, PRECOND_TIERS))
+        viol.append(1 if cls.get(UNSAFE_VIOLATION_TIER) else 0)
+
+    maint = [_sdr_code(mk, yr, lut) for mk, yr in zip(m["acft_make"], m["year"])]
+    sev = m["severity_class"].apply(binarize_severity).fillna(0).astype(int).to_numpy()
 
     def fac(col):
         return pd.factorize(m[col].fillna("Unknown").astype(str))[0]
 
     cols = {
-        "org_climate": np.array(org),
         "employment_qoq": fac("employment_bracket"),
+        "fuel_qoq": fac("fuel_bracket"),
+        "revenue_qoq": fac("revenue_bracket"),
+        "loadfactor_qoq": fac("loadfactor_bracket"),
+        "maintenance_defect": np.array(maint),
         "visual_condition": fac("visual_condition"),
         "light_conditions": fac("light_conditions"),
-        "sky_conditions": fac("sky_conditions"),
         "time_of_day": (m["light_conditions"].astype(str).str.strip() == "Daylight").astype(int).to_numpy(),
         "person_involved": fac("person_involved"),
         "pilot_hours_bracket": fac("pilot_hours_bracket"),
-        "supervisory": np.array(sup),
         "operator": np.array(ope),
-        "unsafe": np.array(uns),
-        "severity_class": pd.to_numeric(m["severity_class"], errors="coerce").fillna(0).astype(int).to_numpy(),
+        "violation": np.array(viol),
+        "severity_class": sev,
     }
     X = np.column_stack([cols[f] for f in FEATURES]).astype("float64")
     print(f"Feature matrix: {X.shape[0]} rows x {X.shape[1]} vars")

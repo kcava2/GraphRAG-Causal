@@ -1,0 +1,16 @@
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+Could not get FontBBox from font descriptor because None cannot be parsed as 4 floats
+CAROL Part-121 events: 1192
+  avall.mdb: matched 688 events
+  pre2008.mdb: matched 503 events
+total matched events: 1191
+
+Wrote C:\Users\kaitl\OneDrive\Documentos\GraphRAG-Causal\data\ntsb_clean.csv: 1013 commercial (Part-121) NTSB records
+severity_class dist: {3: 407, 2: 314, 1: 258, 4: 34}
+events with >=1 fatality (inj_tot_f>0): 21 / 1013 (2%)  [for a future fatal/non-fatal target]
+combined_text non-empty: 1010

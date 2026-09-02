@@ -1,0 +1,31 @@
+  SDR-2000.csv: 48423 usable rows
+  SDR-2001.csv: 46021 usable rows
+  SDR-2002.csv: 40316 usable rows
+  SDR-2003.csv: 39578 usable rows
+  SDR-2004.csv: 40356 usable rows
+  SDR-2005.csv: 41192 usable rows
+  SDR-2006.csv: 48933 usable rows
+  SDR-2007.csv: 52050 usable rows
+  SDR-2008.csv: 51992 usable rows
+  SDR-2009.csv: 54753 usable rows
+  SDR-2010.csv: 61497 usable rows
+  SDR-2011.csv: 76242 usable rows
+  SDR-2012.csv: 73476 usable rows
+  SDR-2013.csv: 75724 usable rows
+  SDR-2014.csv: 64494 usable rows
+  SDR-2015.csv: 61433 usable rows
+  SDR-2016.csv: 60265 usable rows
+  SDR-2017.csv: 60736 usable rows
+  SDR-2018.csv: 59912 usable rows
+  SDR-2019.csv: 66372 usable rows
+  SDR-2020.csv: 52616 usable rows
+  SDR-2021.csv: 64566 usable rows
+  SDR-2022.csv: 62538 usable rows
+  SDR-2023.csv: 62558 usable rows
+  SDR-2024.csv: 66013 usable rows
+  SDR-2025.csv: 67280 usable rows
+  SDR-2026.csv: 24872 usable rows
+  commercial-only: kept 631/1291 cells (28 makes)
+
+Wrote C:\Users\kaitl\OneDrive\Documentos\GraphRAG-Causal\data\sdr_defect_brackets.csv: 631 (make, year) cells (make-relative tertiles at 0.85/1.12 × make-median)
+bracket dist: {'low': 211, 'high': 210, 'medium': 210}

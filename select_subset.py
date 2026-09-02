@@ -17,8 +17,13 @@ Score per record = completeness + richness:
 
 This is a deliberately curated (non-random) subset for a methods run.
 
+It also writes a DISJOINT NTSB-KG slice (``ntsb_kg_subset.csv``) for the
+knowledge graph: the top ``--ntsb-kg`` records by score among NTSB records NOT in
+``ntsb_subset.csv`` — so the KG's in-distribution NTSB events never overlap the
+LSTM train/val/test data (no leakage).
+
 Usage:
-    python select_subset.py --ntsb 1000 --asias 500 --asrs 500
+    python select_subset.py --ntsb 6000 --asias 2000 --asrs 2000 --ntsb-kg 2000
 """
 
 import argparse
@@ -84,9 +89,15 @@ def score_source(df: pd.DataFrame, source: str) -> pd.DataFrame:
     return df.sort_values("_score", ascending=False)
 
 
-def select(source: str, in_name: str, out_name: str, n: int):
+def select(source: str, in_name: str, out_name: str, n: int,
+           exclude_ids=None, id_col=None):
     path = os.path.join(DATA, in_name)
     df = pd.read_csv(path, dtype=str)
+    if exclude_ids and id_col and id_col in df.columns:
+        before = len(df)
+        df = df[~df[id_col].astype(str).isin(exclude_ids)].reset_index(drop=True)
+        print(f"  excluded {before - len(df)} records already in the LSTM subset "
+              f"(disjoint guarantee)")
     scored = score_source(df, source)
     take = min(n, len(scored))
     sub = scored.head(take).drop(columns=["_completeness", "_narr_len", "_score"])
@@ -107,14 +118,24 @@ def select(source: str, in_name: str, out_name: str, n: int):
 
 def main():
     ap = argparse.ArgumentParser(description="Curate a high-quality subset per source")
-    ap.add_argument("--ntsb", type=int, default=1000)
+    ap.add_argument("--ntsb", type=int, default=1000, help="LSTM NTSB subset size.")
     ap.add_argument("--asias", type=int, default=500)
     ap.add_argument("--asrs", type=int, default=500)
+    ap.add_argument("--ntsb-kg", type=int, default=2000,
+                    help="Disjoint NTSB-KG slice size (records NOT in ntsb_subset; "
+                         "0 to skip).")
     args = ap.parse_args()
 
     select("NTSB", "ntsb_clean.csv", "ntsb_subset.csv", args.ntsb)
     select("ASIAS", "asias_clean.csv", "asias_subset.csv", args.asias)
     select("ASRS", "asrs_clean.csv", "asrs_subset.csv", args.asrs)
+
+    # Disjoint NTSB-KG slice: top-scored NTSB records NOT in the LSTM subset.
+    if args.ntsb_kg > 0:
+        sub_ids = set(pd.read_csv(os.path.join(DATA, "ntsb_subset.csv"),
+                                  dtype=str)["ev_id"].astype(str))
+        select("NTSB", "ntsb_clean.csv", "ntsb_kg_subset.csv", args.ntsb_kg,
+               exclude_ids=sub_ids, id_col="ev_id")
     print("\nDone. Subset CSVs written to data/.")
 
 

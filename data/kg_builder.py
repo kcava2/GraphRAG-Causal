@@ -3,14 +3,16 @@ Knowledge Graph Construction (Stage 3)
 ======================================
 Reads ``data/asias_clean.csv`` and ``data/asrs_clean.csv`` (Stage 1), runs the
 Stage-2 Task 1 (HFACS classification) + Task 2 (relationship extraction) LLM
-passes **inline** on the ASIAS/ASRS narratives, and builds a Neo4j knowledge
-graph (MERGE/upsert only). Finally it writes two read-only FAISS indexes
-(``asias.faiss`` / ``asrs.faiss``) for semantic retrieval.
+passes **inline** on the ASIAS/ASRS/NTSB narratives, and builds a Neo4j knowledge
+graph (MERGE/upsert only). Finally it writes per-source read-only FAISS indexes
+(``asias.faiss`` / ``asrs.faiss`` / ``ntsb_kg.faiss``) for semantic retrieval.
 
-**NTSB never enters this stage** — not as nodes, edges, properties, or LLM
-input. This file never reads ``ntsb_clean.csv`` or ``hfacs_results.csv`` (the
-Stage-2 output is the NTSB training corpus only). After this stage the KG and
-both indexes are intended to be read-only.
+**NTSB-in-KG is a DISJOINT in-distribution slice** — records NOT in
+``ntsb_subset.csv`` (i.e. never used for LSTM train/val/test), passed via
+``--ntsb-csv``. This lets the precondition prior be sourced in-distribution
+without leakage. Extraction targets Preconditions + Unsafe Acts tiers only
+(organizational/supervisory are no longer mined). The KG/indexes are read-only
+afterward.
 
 Graph shape
 -----------
@@ -62,11 +64,16 @@ CONTEXT_EDGE = {
     "EnvironmentalContextNode": "HAS_ENV_CONTEXT",
     "PersonnelContextNode": "HAS_PERSONNEL_CONTEXT",
     "OrganizationalContextNode": "HAS_ORG_CONTEXT",
+    "TechnologicalContextNode": "HAS_TECH_CONTEXT",   # SDR maintenance-reliability
 }
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ASIAS_CSV = os.path.join(_HERE, "asias_clean.csv")
 ASRS_CSV = os.path.join(_HERE, "asrs_clean.csv")
+# NTSB-KG: a DISJOINT in-distribution slice (records NOT in ntsb_subset.csv, i.e.
+# never used for LSTM train/test). Built so the precondition prior can be sourced
+# in-distribution without leakage. Default points at the selected slice.
+NTSB_CSV = os.path.join(_HERE, "ntsb_kg_subset.csv")
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +184,8 @@ def extract_record(model_name: str, narrative: str, context: str):
 # Source-specific row helpers
 # ---------------------------------------------------------------------------
 
-_ID_COL = {"ASIAS": "accident_id", "ASRS": "acn"}
+_ID_COL = {"ASIAS": "accident_id", "ASRS": "acn", "NTSB": "ev_id"}
+_DEFAULT_CSV = {"ASIAS": ASIAS_CSV, "ASRS": ASRS_CSV, "NTSB": NTSB_CSV}
 
 
 def _narrative_and_context(row: pd.Series, source: str):
@@ -190,6 +198,13 @@ def _narrative_and_context(row: pd.Series, source: str):
             ("Cause factor", "cause_factor"),
             ("Cause subcategory", "cause_subcategory"),
             ("Weather factor", "weather_factor"),
+        ]
+    elif source == "NTSB":
+        narrative = _clean(row.get("combined_text"))
+        ctx_cols = [
+            ("Visual condition", "visual_condition"),
+            ("Light condition", "light_conditions"),
+            ("NTSB finding path", "finding_description_agg"),
         ]
     else:  # ASRS
         narrative = "\n\n".join(
@@ -205,6 +220,42 @@ def _narrative_and_context(row: pd.Series, source: str):
     lines = [f"- {label}: {_clean(row.get(col))}"
              for label, col in ctx_cols if _clean(row.get(col))]
     return narrative, "\n".join(lines)
+
+
+# SDR maintenance-reliability lookup {(make_upper, year): bracket}, lazy-loaded from
+# data/sdr_defect_brackets.csv (built by sdr_defect_rate.py). Absent file -> no SDR
+# context (the rest of the KG is unaffected).
+_SDR_BRACKETS = None
+_SDR_PATH = os.path.join(_HERE, "sdr_defect_brackets.csv")
+
+
+def _sdr_brackets():
+    global _SDR_BRACKETS
+    if _SDR_BRACKETS is None:
+        if os.path.exists(_SDR_PATH):
+            t = pd.read_csv(_SDR_PATH, dtype=str)
+            _SDR_BRACKETS = {(str(r["make"]).upper(), int(float(r["year"]))): r["bracket"]
+                             for _, r in t.iterrows()}
+        else:
+            _SDR_BRACKETS = {}
+    return _SDR_BRACKETS
+
+
+def _sdr_bracket(row: pd.Series, source: str):
+    """maintenance_defect_rate bracket for the event's manufacturer + year, or None.
+    Keyed by event year so it never reflects post-accident maintenance history."""
+    table = _sdr_brackets()
+    if not table:
+        return None
+    from standardize import normalize_make
+    make = normalize_make(row.get("acft_make") or row.get("manufacturer"))
+    if not make:
+        return None
+    try:
+        year = int(float(_clean(row.get("year"))))
+    except (ValueError, TypeError):
+        return None
+    return table.get((make, year))
 
 
 def _context_nodes(row: pd.Series, source: str):
@@ -226,14 +277,21 @@ def _context_nodes(row: pd.Series, source: str):
     ph = _clean(row.get("pilot_hours_bracket"))
     if ph:
         nodes.append(("PersonnelContextNode", {"feature": "pilot_hours_bracket", "value": ph}))
-    eb = _clean(row.get("employment_bracket"))
-    if eb:
-        nodes.append(("OrganizationalContextNode",
-                      {"feature": "employment_pressure", "value_bracket": eb}))
-    fb = _clean(row.get("fuel_bracket"))
-    if fb:
-        nodes.append(("OrganizationalContextNode",
-                      {"feature": "fuel_cost_pressure", "value_bracket": fb}))
+    # Economic pressure context (QoQ brackets). 'unknown' (neutral/missing, e.g.
+    # pre-2002 load factor or a 0% delta) is OMITTED so retrieval never matches on
+    # the absence of a signal.
+    for feat, col in (("employment_pressure", "employment_bracket"),
+                      ("fuel_cost_pressure", "fuel_bracket"),
+                      ("revenue_pressure", "revenue_bracket"),
+                      ("utilization_pressure", "loadfactor_bracket")):
+        b = _clean(row.get(col))
+        if b and b != "unknown":
+            nodes.append(("OrganizationalContextNode",
+                          {"feature": feat, "value_bracket": b}))
+    sdr = _sdr_bracket(row, source)
+    if sdr:
+        nodes.append(("TechnologicalContextNode",
+                      {"feature": "maintenance_defect_rate", "value_bracket": sdr}))
     return nodes
 
 
@@ -246,7 +304,9 @@ def _event_date(row: pd.Series):
 
 
 def _severity(row: pd.Series, source: str):
-    if source != "ASIAS":
+    # ASRS has no injury/severity data; NTSB + ASIAS carry severity_class (stored
+    # on the EventNode so the Stage-5 retriever can build the D-prior).
+    if source == "ASRS":
         return None
     try:
         return int(float(_clean(row.get("severity_class"))))
@@ -300,6 +360,7 @@ class KGWriter:
             "CREATE INDEX env_key IF NOT EXISTS FOR (n:EnvironmentalContextNode) ON (n.feature, n.value)",
             "CREATE INDEX pers_key IF NOT EXISTS FOR (n:PersonnelContextNode) ON (n.feature, n.value)",
             "CREATE INDEX org_key IF NOT EXISTS FOR (n:OrganizationalContextNode) ON (n.feature, n.value_bracket)",
+            "CREATE INDEX tech_key IF NOT EXISTS FOR (n:TechnologicalContextNode) ON (n.feature, n.value_bracket)",
         ]
         for s in stmts:
             self._run(s)
@@ -373,6 +434,19 @@ class KGWriter:
             t1=t1, v1=v1, t2=t2, v2=v2, evidence=evidence,
         )
 
+    def cooccur_context_with_event_factors(self, event_id, source, label, keys):
+        """Co-occur a (newly added) context node with ALL of an event's existing
+        HFACS factors in one query — used by the context-only updater, which has no
+        re-mined factor list. No-op if the event has no factors yet."""
+        keystr = ", ".join(f"{k}:${k}" for k in keys)
+        self._run(
+            f"MATCH (e:EventNode {{event_id:$id, source:$src}})-[:HAS_FACTOR]->(f:HFACSFactorNode) "
+            f"MERGE (c:{label} {{{keystr}}}) "
+            f"MERGE (c)-[r:CO_OCCURS_WITH]->(f) "
+            f"ON CREATE SET r.weight=1 ON MATCH SET r.weight=coalesce(r.weight,0)+1",
+            id=event_id, src=source, **keys,
+        )
+
     def merge_context_factor_edge(self, label, keys, tier, value):
         self.stats["CO_OCCURS_WITH"] += 1
         keystr = ", ".join(f"{k}:${k}" for k in keys)
@@ -444,9 +518,31 @@ def process_record(writer: KGWriter, model_name: str, source: str, row: pd.Serie
     return status
 
 
+def update_context(writer: KGWriter, source: str, limit=None, path=None):
+    """Attach structured CONTEXT nodes to EXISTING EventNodes WITHOUT re-mining
+    HFACS — adds the new economic context (operating revenue, load factor) and any
+    SDR maintenance context to an already-built KG. Idempotent (MERGE); a no-op for
+    events not already in the KG."""
+    path = path or _DEFAULT_CSV[source]
+    df = pd.read_csv(path, dtype=str)
+    if limit:
+        df = df.head(limit)
+    from tqdm import tqdm
+    n = 0
+    for _, row in tqdm(df.iterrows(), total=len(df), desc=f"ctx[{source}]"):
+        event_id = _clean(row.get(_ID_COL[source]))
+        if not event_id or not writer.is_processed(event_id, source):
+            continue                                  # only touch events in the KG
+        for label, keys in _context_nodes(row, source):
+            writer.connect_event_context(event_id, source, label, keys)
+            writer.cooccur_context_with_event_factors(event_id, source, label, keys)
+        n += 1
+    logging.info("%s: updated context on %d existing events", source, n)
+
+
 def build_kg(writer: KGWriter, model_name: str, source: str,
              limit=None, sleep=0.0, path=None):
-    path = path or (ASIAS_CSV if source == "ASIAS" else ASRS_CSV)
+    path = path or _DEFAULT_CSV[source]
     df = pd.read_csv(path, dtype=str)
     if limit:
         df = df.head(limit)
@@ -468,6 +564,8 @@ def build_kg(writer: KGWriter, model_name: str, source: str,
 def _faiss_text(row: pd.Series, source: str) -> str:
     if source == "ASIAS":
         return _clean(row.get("combined_narrative"))
+    if source == "NTSB":
+        return _clean(row.get("combined_text"))
     return "\n\n".join(
         x for x in (_clean(row.get("narrative")), _clean(row.get("synopsis"))) if x
     )
@@ -478,7 +576,7 @@ def build_faiss(writer: KGWriter, source: str, limit=None, path=None):
     import numpy as np
     from sentence_transformers import SentenceTransformer
 
-    path = path or (ASIAS_CSV if source == "ASIAS" else ASRS_CSV)
+    path = path or _DEFAULT_CSV[source]
     df = pd.read_csv(path, dtype=str)
     if limit:
         df = df.head(limit)
@@ -493,7 +591,9 @@ def build_faiss(writer: KGWriter, source: str, limit=None, path=None):
     index = faiss.IndexFlatIP(emb.shape[1])
     index.add(emb)
 
-    prefix = source.lower()
+    # NTSB-KG index is 'ntsb_kg' to avoid colliding with ntsbdataloader's
+    # train-only few-shot 'ntsb.faiss'.
+    prefix = "ntsb_kg" if source == "NTSB" else source.lower()
     faiss_path = os.path.join(_HERE, f"{prefix}.faiss")
     idmap_path = os.path.join(_HERE, f"{prefix}_id_map.csv")
     faiss.write_index(index, faiss_path)
@@ -515,8 +615,9 @@ def build_faiss(writer: KGWriter, source: str, limit=None, path=None):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Build the ASIAS/ASRS Neo4j KG + FAISS indexes")
-    parser.add_argument("--source", choices=["asias", "asrs", "both"], default="both")
+    parser = argparse.ArgumentParser(description="Build the ASIAS/ASRS/NTSB Neo4j KG + FAISS indexes")
+    parser.add_argument("--source", choices=["asias", "asrs", "ntsb", "both", "all"],
+                        default="all")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--sleep", type=float, default=0.0)
@@ -528,10 +629,17 @@ def main():
                         help="Override ASIAS input CSV (e.g. data/asias_subset.csv).")
     parser.add_argument("--asrs-csv", default=None,
                         help="Override ASRS input CSV (e.g. data/asrs_subset.csv).")
+    parser.add_argument("--ntsb-csv", default=None,
+                        help="Override NTSB-KG input CSV (the disjoint slice, e.g. "
+                             "data/ntsb_kg_subset.csv).")
     parser.add_argument("--faiss-only", action="store_true",
                         help="Skip LLM/KG; only (re)build the FAISS indexes.")
     parser.add_argument("--skip-faiss", action="store_true",
                         help="Build the KG but skip FAISS index construction.")
+    parser.add_argument("--update-context", action="store_true",
+                        help="Attach NEW structured context (operating revenue, load "
+                             "factor, SDR) to existing EventNodes without re-mining "
+                             "HFACS or rebuilding FAISS. Cheap; needs the KG already built.")
     parser.add_argument("--dry-run", action="store_true",
                         help="No Neo4j writes; run extraction + edge logic + "
                              "FAISS and print a node/edge tally.")
@@ -543,11 +651,22 @@ def main():
     if args.num_predict is not None:
         _GEN_OPTIONS["num_predict"] = args.num_predict
 
-    csv_for = {"ASIAS": args.asias_csv, "ASRS": args.asrs_csv}
-    sources = ["ASIAS", "ASRS"] if args.source == "both" else [args.source.upper()]
+    csv_for = {"ASIAS": args.asias_csv, "ASRS": args.asrs_csv, "NTSB": args.ntsb_csv}
+    if args.source == "all":
+        sources = ["ASIAS", "ASRS", "NTSB"]
+    elif args.source == "both":
+        sources = ["ASIAS", "ASRS"]
+    else:
+        sources = [args.source.upper()]
     writer = KGWriter(dry_run=args.dry_run)
 
     try:
+        if args.update_context:
+            writer.ensure_schema()
+            for src in sources:
+                update_context(writer, src, limit=args.limit, path=csv_for[src])
+            return
+
         if not args.faiss_only:
             model_name = _resolve_model(args.model)
             logging.info("Using model: %s (num_ctx=%d, sleep=%.1fs, dry_run=%s)",

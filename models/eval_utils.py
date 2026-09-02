@@ -4,8 +4,9 @@ eval_utils.py  —  shared plotting utilities for Stage-6 evaluation
 Used by models/lstm/eval.py and models/causal_discovery.py. All functions write
 a PNG to figures/ and return the path. Static matplotlib only (no new deps).
 
-The evaluation operates on the 5-head causal LSTM:
-  O/A/B/C are multi-label HFACS heads (sigmoid); D is single-class severity.
+The evaluation operates on the 3-head causal LSTM (org/supervisory influences are
+a structured context input, not predicted):
+  B/C are multi-label HFACS heads (sigmoid); D is single-class severity.
 Single-label metrics (balanced-acc, kappa, confusion) apply to D only.
 """
 
@@ -21,9 +22,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 FIG = os.path.join(_HERE, "..", "figures")
 os.makedirs(FIG, exist_ok=True)
 
-HEADS = ["O", "A", "B", "C"]                # multi-label heads (D handled apart)
-HEAD_LABEL = {"O": "Organizational", "A": "Supervisory",
-              "B": "Preconditions", "C": "Unsafe Acts", "D": "Severity"}
+HEADS = ["B", "C"]                          # multi-label heads (D handled apart)
+STEPS = ["B", "C", "D"]                     # all predicted steps
+HEAD_LABEL = {"B": "Preconditions", "C": "Unsafe Acts", "D": "Severity"}
 # stable colour per condition
 COND_COLORS = ["#4C72B0", "#55A868", "#DD8452", "#C44E52", "#8172B3",
                "#937860", "#DA8BC3", "#8C8C8C"]
@@ -71,24 +72,51 @@ def plot_metric_grouped(summary, metric="microF1", name="eval_f1_by_condition.pn
     return _save(fig, name)
 
 
-def plot_chain_and_gengap(summary, name="eval_chain_completion.png"):
+def plot_step_metrics(summary, name="eval_steps.png"):
+    """Per-step macro-F1, balanced accuracy, and generalization error, overlaid.
+
+    Reads '{S}_macroF1', '{S}_balacc', '{S}_generror' for S in B/C/D. Macro-F1
+    averages F1 over tiers (all equal); balanced accuracy = macro per-tier
+    (sensitivity+specificity)/2, so a collapsed/all-zero head scores ~0.5 (chance),
+    not a misleadingly high Hamming accuracy.
+    """
     conds = [s["condition"] for s in summary]
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-    colors = [_cond_color(i) for i in range(len(conds))]
+    panels = [("_F1", "F1 (micro B/C · macro D)", (0, 1)),
+              ("_accuracy", "Accuracy (label-wise B/C · class D)", (0, 1)),
+              ("_generror", "Generalization error (train − test F1)", None)]
+    fig, axes = plt.subplots(1, 3, figsize=(22, 6))
+    x = np.arange(len(STEPS)); w = 0.8 / max(len(conds), 1)
+    for ax, (suffix, title, ylim) in zip(axes, panels):
+        for i, s in enumerate(summary):
+            vals = [s.get(f"{st}{suffix}", 0.0) for st in STEPS]
+            ax.bar(x + (i - (len(conds) - 1) / 2) * w, vals, w,
+                   label=s["condition"], color=_cond_color(i))
+        ax.set_xticks(x)
+        ax.set_xticklabels([HEAD_LABEL[st] for st in STEPS], rotation=20, ha="right")
+        ax.set_title(title)
+        if ylim:
+            ax.set_ylim(*ylim)
+        else:
+            ax.axhline(0, color="black", lw=0.8)
+        ax.grid(axis="y", alpha=0.3)
+        ax.spines[["top", "right"]].set_visible(False)
+    axes[0].legend(ncol=min(len(conds), 4), fontsize=8)
+    fig.suptitle("Per-step performance by condition", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    return _save(fig, name)
 
+
+def plot_chain(summary, name="eval_chain_completion.png"):
+    """Chain-completion rate (all 4 heads exact) per condition."""
+    conds = [s["condition"] for s in summary]
     chain = [s.get("chain_completion_rate", 0.0) for s in summary]
-    b = ax1.bar(conds, chain, color=colors)
+    fig, ax = plt.subplots(figsize=(max(7, 1.5 * len(conds)), 6))
+    b = ax.bar(conds, chain, color=[_cond_color(i) for i in range(len(conds))])
     for bar, v in zip(b, chain):
-        ax1.text(bar.get_x() + bar.get_width() / 2, v, f"{v:.3f}", ha="center", va="bottom", fontsize=9)
-    ax1.set_title("Chain-completion rate (all 5 heads exact)"); ax1.set_ylabel("rate")
-    ax1.spines[["top", "right"]].set_visible(False)
-
-    gap = [s.get("generalization_error_C", 0.0) for s in summary]
-    ax2.bar(conds, gap, color=colors)
-    ax2.axhline(0, color="black", lw=0.8)
-    ax2.set_title("Generalization gap on Unsafe Acts (train − test microF1)")
-    ax2.set_ylabel("Δ microF1"); ax2.spines[["top", "right"]].set_visible(False)
-    fig.suptitle("Causal chain & generalization", fontsize=14, fontweight="bold")
+        ax.text(bar.get_x() + bar.get_width() / 2, v, f"{v:.3f}",
+                ha="center", va="bottom", fontsize=9)
+    ax.set_title("Chain-completion rate (A·B·C·D all exact)", fontsize=13, fontweight="bold")
+    ax.set_ylabel("rate"); ax.spines[["top", "right"]].set_visible(False)
     plt.tight_layout()
     return _save(fig, name)
 
@@ -102,7 +130,7 @@ def plot_severity(summary, confusions, name="eval_severity.png"):
 
     ax = fig.add_subplot(gs[0, :])
     x = np.arange(len(conds)); w = 0.25
-    for j, met in enumerate(["D_accuracy", "D_balanced_acc", "D_macroF1"]):
+    for j, met in enumerate(["D_accuracy", "D_balanced_acc", "D_F1"]):
         ax.bar(x + (j - 1) * w, [s.get(met, 0.0) for s in summary], w,
                label=met.replace("D_", ""))
     ax.set_xticks(x); ax.set_xticklabels(conds); ax.set_ylim(0, 1)
@@ -132,11 +160,11 @@ def plot_severity(summary, confusions, name="eval_severity.png"):
 
 def plot_roc(roc_data, name="eval_roc.png"):
     """
-    roc_data: {condition: {head: (fpr, tpr, auc)}} for heads in O/A/B/C ('micro')
+    roc_data: {condition: {head: (fpr, tpr, auc)}} for heads in B/C ('micro')
     and 'D' ('macro one-vs-rest'). Skips heads with no curve.
     """
-    heads = ["O", "A", "B", "C", "D"]
-    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+    heads = ["B", "C", "D"]
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
     flat = axes.flatten()
     for ax, h in zip(flat, heads):
         any_curve = False
@@ -153,7 +181,8 @@ def plot_roc(roc_data, name="eval_roc.png"):
         if any_curve:
             ax.legend(fontsize=7)
         ax.spines[["top", "right"]].set_visible(False)
-    flat[-1].axis("off")
+    for extra in flat[len(heads):]:        # hide any unused panels
+        extra.axis("off")
     fig.suptitle("ROC by causal step (conditions overlaid)", fontsize=14, fontweight="bold")
     plt.tight_layout()
     return _save(fig, name)

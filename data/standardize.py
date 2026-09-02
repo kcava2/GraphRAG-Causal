@@ -260,10 +260,100 @@ def encode_ntsb_severity(ev_type: str, inj_tot=None) -> int:
     return -1
 
 
+# ---------------------------------------------------------------------------
+# Manufacturer canonicalization (for joining accident data to FAA SDR)
+# ---------------------------------------------------------------------------
+# Three naming conventions must collapse to one key: SDR uses its own 6-char codes
+# (CNDAIR, DOUG, EMB, BOMBDR, DHAV), NTSB uses full names (CANADAIR, DOUGLAS,
+# EMBRAER, BOMBARDIER, DE HAVILLAND), ASIAS uses other truncations (BOMBAR, EMBRAE,
+# MCDONN, SAAB-S). Aliases map every variant to the SDR code (the join target).
+# Ordered prefix-match on the cleaned full string; first hit wins. McDonnell has NO
+# SDR record (post-1997 its jets are filed under Boeing) -> kept as 'MCDONNELL' so
+# it resolves to unknown by design.
+_MAKE_ALIASES = [
+    ("MCDONNELL", "MCDONNELL"), ("MCDONN", "MCDONNELL"), ("MCDON", "MCDONNELL"),
+    ("EMBRAER", "EMB"), ("EMBRAE", "EMB"), ("EMBRA", "EMB"), ("EMB", "EMB"),
+    ("DOUGLAS", "DOUG"), ("DOUGLA", "DOUG"), ("DOUG", "DOUG"),
+    ("CANADAIR", "CNDAIR"), ("CNDAIR", "CNDAIR"), ("CANAD", "CNDAIR"),
+    ("BOMBARDIER", "BOMBDR"), ("BOMBAR", "BOMBDR"), ("BOMBDR", "BOMBDR"), ("BOMBD", "BOMBDR"),
+    ("DE HAVILLAND", "DHAV"), ("DEHAVILLAND", "DHAV"), ("DEHAV", "DHAV"),
+    ("DHAV", "DHAV"), ("DHC", "DHAV"),
+    ("SAAB", "SAAB"), ("BOEING", "BOEING"), ("AIRBUS", "AIRBUS"),
+    ("LOCKHEED", "LKHEED"), ("LKHEED", "LKHEED"),
+    ("GULFSTREAM", "GULSTM"), ("GULSTM", "GULSTM"),
+]
+
+
+def normalize_make(value) -> str:
+    """Canonical manufacturer key (the SDR code) for joining accident data to SDR.
+    Collapses spelling/truncation/punctuation variants across NTSB/ASIAS/SDR; applied
+    to BOTH sides so aliasing stays consistent. '' for missing."""
+    s = _clean(value).upper()
+    s = "".join(ch if (ch.isalnum() or ch == " ") else " " for ch in s)
+    s = " ".join(s.split())
+    if not s:
+        return ""
+    for prefix, canon in _MAKE_ALIASES:
+        if s.startswith(prefix):
+            return canon
+    return s.split()[0]
+
+
+def encode_ntsb_severity_gravity(highest_injury, damage=None) -> int:
+    """
+    Size-INVARIANT severity from worst-outcome gravity + aircraft damage, instead
+    of injury COUNT (which scales with aircraft capacity and isn't comparable
+    across a 4-seat trainer and a 180-seat jet).
+
+    ev_highest_injury (FATL/SERS/MINR/NONE) and aircraft damage (DEST/SUBS/MINR/
+    NONE) → ordinal that binarizes (>=3) to HIGH = human harm or hull loss
+    (fatal OR aircraft destroyed OR serious injury):
+        FATL or DEST            -> 4  (high: death / hull loss)
+        SERS                    -> 3  (high: serious injury)
+        SUBS                    -> 2  (low:  substantial damage, no serious injury)
+        MINR (injury or damage) -> 1
+        NONE                    -> 0
+        both blank/unknown      -> -1 (dropped)
+
+    Note: pure fatal-OR-destroyed is only ~3% of commercial Part-121 events, far
+    too rare to learn; serious injury is included on the HIGH side to get a
+    learnable, still size-invariant (gravity-based, not injury-count) target.
+    """
+    inj = _clean(highest_injury).upper()
+    dmg = _clean(damage).upper()
+    if inj == "" and dmg == "":
+        return -1
+    if inj == "FATL" or dmg == "DEST":
+        return 4
+    if inj == "SERS":
+        return 3
+    if dmg == "SUBS":
+        return 2
+    if inj == "MINR" or dmg == "MINR":
+        return 1
+    return 0
+
+
 def encode_asias_severity(c104):
     """Map ASIAS c104 injury severity. 'N'->0,'B'->1,'S'->2,'A'->4,'K'->4; else None."""
     s = _clean(c104).upper()
     return {"N": 0, "B": 1, "S": 2, "A": 4, "K": 4}.get(s, None)
+
+
+# Binary severity target (LSTM terminal node + KG D-prior). NOTE: the cleaned data
+# only carries injury-COUNT severity_class (no fatality flag), so this is a
+# high-severity PROXY, not literally fatal. >=3 (2+ injuries) gives a ~55/45
+# balanced, learnable split. To get TRUE fatal/non-fatal, re-derive from raw NTSB
+# injury fields (inj_f_count / ev_highest_injury) in data prep.
+SEVERITY_HIGH_THRESHOLD = 3
+
+
+def binarize_severity(value):
+    """severity_class ordinal -> high(1)/low(0); None on invalid."""
+    try:
+        return 1 if int(float(value)) >= SEVERITY_HIGH_THRESHOLD else 0
+    except (ValueError, TypeError):
+        return None
 
 
 # ---------------------------------------------------------------------------

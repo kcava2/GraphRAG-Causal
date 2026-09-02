@@ -128,6 +128,23 @@ HFACS_SCHEMA = {
 VALID_SUBS = {sub: tier for tier, subs in HFACS_SCHEMA.items() for sub in subs}
 VALID_RELATIONS = {"LEADS_TO", "CO_OCCURS_WITH"}
 
+# Tiers TEXT-MINED, split into two passes (see extract_row):
+#   PASS 1 — UNSAFE ACTS: evidence-gated, >=1 required, NOT blanket-all-four.
+#   PASS 2 — PRECONDITIONS: latent operator/personnel/tech states INFERRED from the
+#            unsafe acts (they are usually implied, not stated).
+# Excluded entirely: Organizational + Supervisory (-> economic context input) and
+# situational_phys (Weather/Lighting/Terrain -> structured visual/light input).
+# HFACS_SCHEMA stays complete as the reference vocabulary.
+PRECOND_EXTRACT_TIERS = ["operator_mental", "operator_physical", "operator_limits",
+                         "situational_tech", "personnel_crm", "personnel_readiness"]
+UNSAFE_EXTRACT_TIERS = ["unsafe_skill", "unsafe_decision", "unsafe_perception",
+                        "unsafe_violation"]
+EXTRACT_TIERS = PRECOND_EXTRACT_TIERS + UNSAFE_EXTRACT_TIERS
+PRECOND_SCHEMA = {t: HFACS_SCHEMA[t] for t in PRECOND_EXTRACT_TIERS}
+UNSAFE_SCHEMA = {t: HFACS_SCHEMA[t] for t in UNSAFE_EXTRACT_TIERS}
+EXTRACT_SCHEMA = {t: HFACS_SCHEMA[t] for t in EXTRACT_TIERS}
+EXTRACT_VALID_SUBS = {sub: t for t in EXTRACT_TIERS for sub in HFACS_SCHEMA[t]}
+
 
 # ---------------------------------------------------------------------------
 # Train split — deterministic, mirrors data/dataloader.py exactly
@@ -305,9 +322,11 @@ def get_ntsb_fewshot_examples(narrative_text: str, n: int = 5,
 
 SYSTEM_TASK1 = (
     "You are an HFACS (Human Factors Analysis and Classification System) expert "
-    "analyst for aviation accident investigation. You respond ONLY with valid "
-    "JSON — no preamble, no markdown, no code fences. Use only the tier names "
-    "and subcategory values provided in the schema."
+    "analyst for aviation accident investigation. You classify the human factors "
+    "in an accident at the HFACS TIER level. Human error applies to ANY person in "
+    "the system — pilot, maintenance crew, ATC, dispatch, ground crew — not just "
+    "the pilot. Factors are frequently IMPLIED by the narrative rather than stated "
+    "outright; infer them. Respond ONLY with valid JSON — no preamble, no markdown."
 )
 
 SYSTEM_TASK2 = (
@@ -335,37 +354,111 @@ def _structured_context(row: pd.Series) -> str:
     return "\n".join(lines)
 
 
-def _build_task1_prompt(row: pd.Series, fewshot: str) -> str:
+def _build_unsafe_prompt(row: pd.Series, fewshot: str) -> str:
+    """PASS 1 — unsafe acts, evidence-gated (cite a phrase per tier; >=1; not all)."""
     narrative = _clean(row.get("combined_text"))
     context = _structured_context(row)
-    schema_json = json.dumps(HFACS_SCHEMA, indent=2)
+    schema_json = json.dumps(UNSAFE_SCHEMA, indent=2)
     parts = [f"NARRATIVE:\n{narrative}"]
     if context:
         parts.append(f"STRUCTURED CONTEXT:\n{context}")
     if fewshot:
         parts.append(f"FEW-SHOT EXAMPLES:\n{fewshot}")
-    parts.append(f"HFACS SCHEMA:\n{schema_json}")
+    parts.append("UNSAFE-ACT TIERS (example factors per tier — recognize the tier, "
+                 f"not limited to these words):\n{schema_json}")
     parts.append(
-        'Classify only tiers and subcategories present in the schema above. '
+        'Identify the UNSAFE ACTS in this accident, committed by ANY human (pilot, '
+        'maintenance, ATC, dispatch, ...). Rules:\n'
+        '- Assign an unsafe-act TIER only when the narrative SPECIFICALLY supports '
+        'that type of act; quote the supporting phrase as the factor and name the '
+        'human. Do NOT assign tiers by default — most accidents involve one or two, '
+        'rarely all four.\n'
+        '- At least ONE unsafe-act tier is required (every accident has one).\n'
         'Respond with valid JSON only, in the shape:\n'
         '{"entities": [{"text": "...", "role": "...", "tier": "..."}], '
-        '"hfacs_classifications": {"<tier_name>": ["<sub_category>"]}}'
+        '"hfacs_classifications": {"<unsafe_tier>": ["<evidence phrase + human role>"]}}'
+    )
+    return "\n\n".join(parts)
+
+
+def _build_precond_prompt(row: pd.Series, unsafe: dict) -> str:
+    """PASS 2 — infer the latent preconditions that SET UP the unsafe acts.
+
+    Conditioned on the unsafe acts from pass 1; NO few-shot (the corpus is
+    precondition-sparse, so few-shot reinforces under-extraction — we rely on
+    explicit inference instructions + worked implied->precondition examples)."""
+    narrative = _clean(row.get("combined_text"))
+    context = _structured_context(row)
+    findings = _clean(row.get("finding_description_agg"))
+    schema_json = json.dumps(PRECOND_SCHEMA, indent=2)
+    parts = [f"NARRATIVE:\n{narrative}"]
+    if context:
+        parts.append(f"STRUCTURED CONTEXT:\n{context}")
+    parts.append(f"UNSAFE ACTS already identified: {sorted(unsafe.keys())}")
+    if findings:
+        parts.append(
+            "NTSB FINDINGS (official coded cause factors — these frequently NAME the "
+            "human factor directly; MAP each 'Personnel issues' finding to its tier "
+            "FIRST, then infer more from the narrative):\n" + findings + "\n\n"
+            "NTSB finding -> precondition-tier guide:\n"
+            "  Personnel issues - Psychological - Attention/monitoring/perception "
+            "-> operator_mental\n"
+            "  Personnel issues - ... - info processing / decision / judgment "
+            "-> operator_mental\n"
+            "  Personnel issues - ... - crew resource mgmt / coordination / "
+            "communication -> personnel_crm\n"
+            "  Personnel issues - Physical - fatigue / impairment / medical "
+            "-> operator_physical\n"
+            "  Personnel issues - ... - experience / knowledge / qualification "
+            "-> operator_limits\n"
+            "  Aircraft - systems / automation / display / interface "
+            "-> situational_tech")
+    parts.append("PRECONDITION TIERS (example factors per tier — not limited to "
+                 f"these words):\n{schema_json}")
+    parts.append(
+        'Now infer the PRECONDITIONS that SET UP those unsafe acts. Use the NTSB '
+        'FINDINGS above as direct evidence (a "Personnel issues" finding almost '
+        'always implies a precondition tier). Beyond the findings, they are usually '
+        'IMPLIED in the narrative. Consider EACH tier SEPARATELY — do NOT default '
+        'everything to operator_mental; several tiers may apply:\n'
+        '  operator_mental    - attention / awareness / motivation state '
+        '(distraction, loss of situational awareness, get-home-itis, complacency)\n'
+        '  operator_physical  - bodily state (fatigue, illness, impairment, '
+        'incapacitation)\n'
+        '  operator_limits    - capability / experience limits (low total time, '
+        'inexperience, insufficient reaction time, visual limitation)\n'
+        '  situational_tech   - equipment / automation / interface factors\n'
+        '  personnel_crm      - COMMUNICATION & COORDINATION failures with the crew, '
+        'ATC, OR others; applies even to a single pilot (failed to communicate, no '
+        'read-back, misread a traffic/clearance call, no approach briefing, poor '
+        'crew coordination, instructor failed to intervene)\n'
+        '  personnel_readiness- readiness failures (crew rest violation, '
+        'self-medicating, inadequate preparation)\n'
+        'Worked IMPLIED examples (note the variety of tiers):\n'
+        '  "did not read back / misread the ATC clearance"  -> personnel_crm\n'
+        '  "the instructor did not take control in time"     -> personnel_crm\n'
+        '  "low-time pilot in a high-performance airplane"   -> operator_limits\n'
+        '  "on the fourth leg of a long duty day"            -> operator_physical\n'
+        '  "confusing autopilot mode annunciations"          -> situational_tech\n'
+        '  "continued a night approach with no visual cues"  -> operator_mental\n'
+        'Include a tier when the narrative reasonably supports it (inferred is fine; '
+        'invented is not). Name the responsible human. Respond with valid JSON only:\n'
+        '{"hfacs_classifications": {"<precond_tier>": ["<inferred factor + human role>"]}}'
     )
     return "\n\n".join(parts)
 
 
 def _build_task2_prompt(row: pd.Series, entities: list) -> str:
     narrative = _clean(row.get("combined_text"))
-    valid_subs = sorted(VALID_SUBS.keys())
     return (
         f"NARRATIVE:\n{narrative}\n\n"
         f"HFACS ENTITIES:\n{json.dumps(entities)}\n\n"
-        f"VALID SUBCATEGORIES (subject/object must be one of these):\n"
-        f"{json.dumps(valid_subs)}\n\n"
-        'Extract directed causal relationships. relation must be "LEADS_TO" or '
-        '"CO_OCCURS_WITH". Respond with valid JSON only, in the shape:\n'
-        '{"relationships": [{"subject": "<sub>", "relation": "LEADS_TO", '
-        '"object": "<sub>", "evidence": "<narrative phrase>"}]}'
+        f"VALID HFACS TIERS (subject/object must be one of these tier names):\n"
+        f"{json.dumps(EXTRACT_TIERS)}\n\n"
+        'Extract directed causal relationships between TIERS. relation must be '
+        '"LEADS_TO" or "CO_OCCURS_WITH". Respond with valid JSON only, in the shape:\n'
+        '{"relationships": [{"subject": "<tier>", "relation": "LEADS_TO", '
+        '"object": "<tier>", "evidence": "<narrative phrase>"}]}'
     )
 
 
@@ -373,25 +466,32 @@ def _build_task2_prompt(row: pd.Series, entities: list) -> str:
 # Validation
 # ---------------------------------------------------------------------------
 
-def _validate_classifications(obj) -> dict:
-    """Keep only schema tiers and, within each, only valid subcategory values."""
+def _validate_classifications(obj, allowed_tiers=None) -> dict:
+    """Keep only valid HFACS TIERS; values are free-text factor descriptions.
+
+    The mined label is the TIER (subcategories were only prompt examples). Factors
+    are free text for the KG / interpretability; the LSTM uses tier PRESENCE.
+    `allowed_tiers` restricts to one pass's tiers (unsafe vs precondition).
+    """
+    allowed = set(allowed_tiers) if allowed_tiers is not None else set(EXTRACT_SCHEMA)
     out: dict[str, list] = {}
     if not isinstance(obj, dict):
         return out
-    for tier, subs in obj.items():
-        if tier not in HFACS_SCHEMA:
+    for tier, facts in obj.items():
+        if tier not in allowed:
             continue
-        if not isinstance(subs, list):
+        if isinstance(facts, str):
+            facts = [facts]
+        if not isinstance(facts, list):
             continue
-        allowed = set(HFACS_SCHEMA[tier])
-        kept = [s for s in subs if isinstance(s, str) and s in allowed]
+        kept = [str(s).strip() for s in facts if str(s).strip()]
         if kept:
             out[tier] = kept
     return out
 
 
 def _validate_relationships(obj) -> list:
-    """Keep relationships whose subject/object are valid subs and relation valid."""
+    """Keep relationships whose subject/object are valid TIERS and relation valid."""
     rels = []
     if isinstance(obj, dict):
         obj = obj.get("relationships", [])
@@ -401,7 +501,7 @@ def _validate_relationships(obj) -> list:
         if not isinstance(r, dict):
             continue
         subj, rel, objc = r.get("subject"), r.get("relation"), r.get("object")
-        if subj in VALID_SUBS and objc in VALID_SUBS and rel in VALID_RELATIONS:
+        if subj in EXTRACT_SCHEMA and objc in EXTRACT_SCHEMA and rel in VALID_RELATIONS:
             rels.append({
                 "subject": subj,
                 "relation": rel,
@@ -421,20 +521,29 @@ def extract_row(model_name: str, row: pd.Series, n_fewshot: int = 5) -> dict:
     narrative = _clean(row.get("combined_text"))
 
     fewshot = get_ntsb_fewshot_examples(narrative, n=n_fewshot, exclude_ev_id=ev_id)
-    raw1 = _call_ollama(model_name, SYSTEM_TASK1, _build_task1_prompt(row, fewshot))
-    parsed1 = _extract_json(raw1)
 
+    # Pass 1 — UNSAFE ACTS (evidence-gated, >=1 required)
+    raw1 = _call_ollama(model_name, SYSTEM_TASK1, _build_unsafe_prompt(row, fewshot))
+    parsed1 = _extract_json(raw1)
     if parsed1 is None:
         return {
             "ev_id": ev_id, "entities_json": "[]", "hfacs_json": "{}",
             "relationships_json": "[]", "extraction_status": "parse_error",
         }
-
     entities = parsed1.get("entities", [])
     if not isinstance(entities, list):
         entities = []
-    classifications = _validate_classifications(parsed1.get("hfacs_classifications"))
+    unsafe = _validate_classifications(parsed1.get("hfacs_classifications"),
+                                       UNSAFE_EXTRACT_TIERS)
 
+    # Pass 2 — PRECONDITIONS (infer the latent states that set up the unsafe acts)
+    raw1b = _call_ollama(model_name, SYSTEM_TASK1, _build_precond_prompt(row, unsafe))
+    parsed1b = _extract_json(raw1b)
+    precond = _validate_classifications(
+        parsed1b.get("hfacs_classifications") if isinstance(parsed1b, dict) else None,
+        PRECOND_EXTRACT_TIERS)
+
+    classifications = {**precond, **unsafe}
     status = "success" if (entities or classifications) else "empty"
 
     relationships = []

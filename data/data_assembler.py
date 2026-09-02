@@ -52,6 +52,8 @@ OUT = _HERE  # write clean CSVs alongside the data package
 NTSB_CSV = os.path.join(RAW, "ntsb accident data.csv")
 EMPLOYMENT_XLS = os.path.join(RAW, "employment.xls")
 FUEL_PDF = os.path.join(RAW, "OST_R _ BTS _ Transtats.pdf")
+OPERATING_REVENUE_XLS = os.path.join(RAW, "operating revenue.xls")  # BTS, quarterly
+LOAD_FACTOR_XLS = os.path.join(RAW, "load factor.xls")              # BTS, monthly (2002-10+)
 
 _MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
@@ -94,20 +96,31 @@ def _int_or_none(value):
 # Economic series (employment HTML + fuel PDF) → (year, month) → QoQ %
 # ---------------------------------------------------------------------------
 
-def load_employment() -> tuple[dict, dict]:
-    """
-    Parse employment.xls (HTML) → {(year, month): employment_qoq_pct}.
-
-    Monthly rows have the shape [Month, Year, Full-time, Part-time, Grand Total]
-    with comma-formatted integers. A trailing unrelated carrier table is
-    ignored by requiring an integer Month in 1..12 and a 4-digit Year.
-    """
-    with open(EMPLOYMENT_XLS, "r", encoding="latin-1") as f:
+def _html_rows(path):
+    """Yield each table row of a BTS HTML-table 'xls' export as a list of cells."""
+    with open(path, "r", encoding="latin-1") as f:
         soup = BeautifulSoup(f.read(), "html.parser")
-
-    records = []
     for tr in soup.find_all("tr"):
-        cells = [c.get_text(strip=True) for c in tr.find_all(["td", "th"])]
+        yield [c.get_text(strip=True) for c in tr.find_all(["td", "th"])]
+
+
+def _qoq_from_monthly(records: list) -> dict:
+    """records [(year, month, value)] → {(y, m): QoQ%} via pct_change(periods=3)."""
+    d = (pd.DataFrame(records, columns=["year", "month", "val"])
+         .drop_duplicates(["year", "month"]).sort_values(["year", "month"])
+         .reset_index(drop=True))
+    d["qoq"] = d["val"].pct_change(periods=3) * 100.0
+    return {(int(r.year), int(r.month)): (None if pd.isna(r.qoq) else float(r.qoq))
+            for r in d.itertuples()}
+
+
+def load_employment() -> dict:
+    """employment.xls (HTML) → {(year, month): employment_qoq_pct}.
+
+    Monthly rows are [Month, Year, Full-time, Part-time, Grand Total]; a trailing
+    unrelated carrier table is ignored by requiring Month in 1..12, 4-digit Year."""
+    records = []
+    for cells in _html_rows(EMPLOYMENT_XLS):
         if len(cells) < 5:
             continue
         month_s, year_s, grand = cells[0], cells[1], cells[4]
@@ -116,25 +129,13 @@ def load_employment() -> tuple[dict, dict]:
         month, year = int(month_s), int(year_s)
         if not (1 <= month <= 12 and 1900 <= year <= 2100):
             continue
-        grand_val = _num(grand)
-        if grand_val is None:
-            continue
-        records.append((year, month, grand_val))
-
-    emp = pd.DataFrame(records, columns=["year", "month", "grand_total"])
-    emp = emp.sort_values(["year", "month"]).reset_index(drop=True)
-    emp["qoq"] = emp["grand_total"].pct_change(periods=3) * 100.0
-    qoq_map = {
-        (int(r.year), int(r.month)): (None if pd.isna(r.qoq) else float(r.qoq))
-        for r in emp.itertuples()
-    }
-    raw_map = {
-        (int(r.year), int(r.month)): float(r.grand_total) for r in emp.itertuples()
-    }
-    return qoq_map, raw_map
+        v = _num(grand)
+        if v is not None:
+            records.append((year, month, v))
+    return _qoq_from_monthly(records)
 
 
-def load_fuel() -> tuple[dict, dict]:
+def load_fuel() -> dict:
     """
     Extract the fuel table from OST_R _ BTS _ Transtats.pdf →
     {(year, month): fuel_cost_qoq_pct}.
@@ -170,25 +171,78 @@ def load_fuel() -> tuple[dict, dict]:
     fuel = fuel.drop_duplicates(["year", "month"])
     fuel = fuel.sort_values(["year", "month"]).reset_index(drop=True)
     fuel["qoq"] = fuel["cpg"].pct_change(periods=3) * 100.0
-    qoq_map = {
-        (int(r.year), int(r.month)): (None if pd.isna(r.qoq) else float(r.qoq))
-        for r in fuel.itertuples()
-    }
-    raw_map = {
-        (int(r.year), int(r.month)): float(r.cpg) for r in fuel.itertuples()
-    }
-    return qoq_map, raw_map
+    return {(int(r.year), int(r.month)): (None if pd.isna(r.qoq) else float(r.qoq))
+            for r in fuel.itertuples()}
 
 
-def attach_economics(df: pd.DataFrame, emp_qoq: dict, emp_raw: dict,
-                     fuel_qoq: dict, fuel_raw: dict) -> pd.DataFrame:
+def load_operating_revenue() -> dict:
+    """operating revenue.xls (HTML) → {(year, month): operating_revenue_qoq_pct}.
+
+    Quarterly rows [Year, Quarter, ..., TOTAL]; QoQ = pct_change over consecutive
+    quarters, then broadcast to that quarter's three calendar months."""
+    records = []
+    for cells in _html_rows(OPERATING_REVENUE_XLS):
+        if len(cells) < 3:
+            continue
+        year_s, quarter_s, total = cells[0], cells[1], cells[-1]
+        if not (year_s.isdigit() and quarter_s.isdigit()):
+            continue
+        year, quarter = int(year_s), int(quarter_s)
+        if not (1 <= quarter <= 4 and 1900 <= year <= 2100):
+            continue
+        v = _num(total)
+        if v is not None:
+            records.append((year, quarter, v))
+    d = (pd.DataFrame(records, columns=["year", "quarter", "val"])
+         .drop_duplicates(["year", "quarter"]).sort_values(["year", "quarter"])
+         .reset_index(drop=True))
+    d["qoq"] = d["val"].pct_change(periods=1) * 100.0
+    qmap = {}
+    for r in d.itertuples():
+        q = None if pd.isna(r.qoq) else float(r.qoq)
+        for mo in range((int(r.quarter) - 1) * 3 + 1, (int(r.quarter) - 1) * 3 + 4):
+            qmap[(int(r.year), mo)] = q
+    return qmap
+
+
+def load_load_factor() -> dict:
+    """load factor.xls (HTML) → {(year, month): load_factor_qoq_pct}.
+
+    Monthly rows [Year, Month, ..., TOTAL] starting 2002-10; 'TOTAL' month rows
+    are skipped. Pre-2002 has no data, so unmatched rows fall back to 0.0 (neutral
+    delta) at join time."""
+    records = []
+    for cells in _html_rows(LOAD_FACTOR_XLS):
+        if len(cells) < 3:
+            continue
+        year_s, month_s, total = cells[0], cells[1], cells[-1]
+        if not (year_s.isdigit() and month_s.isdigit()):
+            continue
+        year, month = int(year_s), int(month_s)
+        if not (1 <= month <= 12 and 1900 <= year <= 2100):
+            continue
+        v = _num(total)
+        if v is not None:
+            records.append((year, month, v))
+    return _qoq_from_monthly(records)
+
+
+def load_economics() -> dict:
+    """Bundle every BTS QoQ series into one dict keyed by feature name."""
+    return {"employment": load_employment(), "fuel": load_fuel(),
+            "operating_revenue": load_operating_revenue(),
+            "load_factor": load_load_factor()}
+
+
+def attach_economics(df: pd.DataFrame, econ: dict) -> pd.DataFrame:
     """
-    LEFT JOIN employment & fuel on integer (year, month).
+    LEFT JOIN the four BTS QoQ series on integer (year, month).
 
-    Adds QoQ % (bucketed via bracket_qoq) plus the raw level features
-    `industry_total` (employment GrandTotal) and `fuel_cost_per_gallon`
-    (Total CostPerGallon). Fuel has no pre-2000 data, so unmatched rows get
-    fuel_cost_qoq_pct = 0.0 and fuel_cost_per_gallon = 0.0.
+    QoQ-only (no absolute levels): employment, fuel cost, operating revenue, and
+    load factor. Each gets a continuous *_qoq_pct column plus a bracket_qoq()
+    bucket (the discrete value the KG matches on). Series with no data for a
+    (year, month) fall back to 0.0 (neutral delta) — load factor begins 2002-10,
+    so all earlier rows are 0-filled and carry no load-factor signal.
     """
     pairs = list(zip(df["year"], df["month"]))
 
@@ -198,12 +252,14 @@ def attach_economics(df: pd.DataFrame, emp_qoq: dict, emp_raw: dict,
         v = table.get((int(y), int(m)))
         return default if v is None else v
 
-    df["employment_qoq_pct"] = [_lookup(emp_qoq, y, m, np.nan) for y, m in pairs]
-    df["fuel_cost_qoq_pct"] = [_lookup(fuel_qoq, y, m, 0.0) for y, m in pairs]
-    df["industry_total"] = [_lookup(emp_raw, y, m, np.nan) for y, m in pairs]
-    df["fuel_cost_per_gallon"] = [_lookup(fuel_raw, y, m, 0.0) for y, m in pairs]
+    df["employment_qoq_pct"] = [_lookup(econ["employment"], y, m, np.nan) for y, m in pairs]
+    df["fuel_cost_qoq_pct"] = [_lookup(econ["fuel"], y, m, 0.0) for y, m in pairs]
+    df["operating_revenue_qoq_pct"] = [_lookup(econ["operating_revenue"], y, m, 0.0) for y, m in pairs]
+    df["load_factor_qoq_pct"] = [_lookup(econ["load_factor"], y, m, 0.0) for y, m in pairs]
     df["employment_bracket"] = df["employment_qoq_pct"].apply(bracket_qoq)
     df["fuel_bracket"] = df["fuel_cost_qoq_pct"].apply(bracket_qoq)
+    df["revenue_bracket"] = df["operating_revenue_qoq_pct"].apply(bracket_qoq)
+    df["loadfactor_bracket"] = df["load_factor_qoq_pct"].apply(bracket_qoq)
     return df
 
 
@@ -249,12 +305,13 @@ NTSB_COLUMNS = [
     "acft_make", "acft_model", "crew_age_mean",
     "finding_description_agg", "occurrence_description_agg",
     "employment_qoq_pct", "fuel_cost_qoq_pct",
-    "industry_total", "fuel_cost_per_gallon",
+    "operating_revenue_qoq_pct", "load_factor_qoq_pct",
     "employment_bracket", "fuel_bracket",
+    "revenue_bracket", "loadfactor_bracket",
 ]
 
 
-def build_ntsb_clean(emp_qoq: dict, emp_raw: dict, fuel_qoq: dict, fuel_raw: dict) -> pd.DataFrame:
+def build_ntsb_clean(econ: dict) -> pd.DataFrame:
     """NTSB training corpus — one row per ev_id after crew-level aggregation."""
     df = pd.read_csv(NTSB_CSV, encoding="latin-1", dtype=str)
 
@@ -309,7 +366,7 @@ def build_ntsb_clean(emp_qoq: dict, emp_raw: dict, fuel_qoq: dict, fuel_raw: dic
     base["acft_model"] = base[M + "acft_model"].apply(_s)
 
     base = base.reset_index()
-    base = attach_economics(base, emp_qoq, emp_raw, fuel_qoq, fuel_raw)
+    base = attach_economics(base, econ)
     return base[NTSB_COLUMNS]
 
 
@@ -336,7 +393,9 @@ ASIAS_COLUMNS = [
     "manufacturer", "model", "state_code", "city", "local_time",
     "cause_factor", "cause_subcategory", "combined_narrative",
     "employment_qoq_pct", "fuel_cost_qoq_pct",
+    "operating_revenue_qoq_pct", "load_factor_qoq_pct",
     "employment_bracket", "fuel_bracket",
+    "revenue_bracket", "loadfactor_bracket",
 ]
 
 
@@ -369,7 +428,7 @@ def _read_asias_narratives() -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True).drop_duplicates("c5")
 
 
-def build_asias_clean(emp_qoq: dict, emp_raw: dict, fuel_qoq: dict, fuel_raw: dict) -> pd.DataFrame:
+def build_asias_clean(econ: dict) -> pd.DataFrame:
     """ASIAS Scheduled-Air-Carrier records for the KG / RAG (never LSTM)."""
     df = _read_asias_structured()
     # Scheduled-Air-Carrier / Part 121-125 selection. c101 (purpose-of-flight)
@@ -411,7 +470,7 @@ def build_asias_clean(emp_qoq: dict, emp_raw: dict, fuel_qoq: dict, fuel_raw: di
                 "model", "local_time"):
         df[col] = df[col].apply(_s)
 
-    df = attach_economics(df, emp_qoq, emp_raw, fuel_qoq, fuel_raw)
+    df = attach_economics(df, econ)
     return df[ASIAS_COLUMNS]
 
 
@@ -445,7 +504,9 @@ ASRS_COLUMNS = [
     "human_factors", "anomaly", "contributing_factors", "result",
     "primary_problem", "narrative", "synopsis",
     "employment_qoq_pct", "fuel_cost_qoq_pct",
+    "operating_revenue_qoq_pct", "load_factor_qoq_pct",
     "employment_bracket", "fuel_bracket",
+    "revenue_bracket", "loadfactor_bracket",
 ]
 
 
@@ -472,7 +533,7 @@ def _find_col(columns, group: str, sub: str):
     return None
 
 
-def build_asrs_clean(emp_qoq: dict, emp_raw: dict, fuel_qoq: dict, fuel_raw: dict) -> pd.DataFrame:
+def build_asrs_clean(econ: dict) -> pd.DataFrame:
     """ASRS FAR 121/125 reports for the KG / RAG (never LSTM)."""
     frames = []
     for path in sorted(glob.glob(os.path.join(RAW, "ASRS_DBOnline_*.csv")),
@@ -515,7 +576,7 @@ def build_asrs_clean(emp_qoq: dict, emp_raw: dict, fuel_qoq: dict, fuel_raw: dic
     for col in ("acn", "far_part", "primary_problem", "narrative", "synopsis"):
         df[col] = df[col].apply(_s)
 
-    df = attach_economics(df, emp_qoq, emp_raw, fuel_qoq, fuel_raw)
+    df = attach_economics(df, econ)
     return df[ASRS_COLUMNS]
 
 
@@ -534,22 +595,22 @@ def _summary(name, df, extra_cols=()):
 
 def main():
     print("Loading economic series …")
-    emp_qoq, emp_raw = load_employment()
-    fuel_qoq, fuel_raw = load_fuel()
-    print(f"  employment months: {len(emp_qoq)} | fuel months: {len(fuel_qoq)}")
+    econ = load_economics()
+    print(f"  employment {len(econ['employment'])} | fuel {len(econ['fuel'])} | "
+          f"revenue {len(econ['operating_revenue'])} | load factor {len(econ['load_factor'])}")
 
     print("\nBuilding ntsb_clean.csv …")
-    ntsb = build_ntsb_clean(emp_qoq, emp_raw, fuel_qoq, fuel_raw)
+    ntsb = build_ntsb_clean(econ)
     ntsb.to_csv(os.path.join(OUT, "ntsb_clean.csv"), index=False)
     _summary("ntsb_clean", ntsb)
 
     print("\nBuilding asias_clean.csv …")
-    asias = build_asias_clean(emp_qoq, emp_raw, fuel_qoq, fuel_raw)
+    asias = build_asias_clean(econ)
     asias.to_csv(os.path.join(OUT, "asias_clean.csv"), index=False)
     _summary("asias_clean", asias)
 
     print("\nBuilding asrs_clean.csv …")
-    asrs = build_asrs_clean(emp_qoq, emp_raw, fuel_qoq, fuel_raw)
+    asrs = build_asrs_clean(econ)
     asrs.to_csv(os.path.join(OUT, "asrs_clean.csv"), index=False)
     _summary("asrs_clean", asrs, extra_cols=("far_part",))
 

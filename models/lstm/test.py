@@ -1,9 +1,10 @@
 """
-test.py  —  single-checkpoint TEST-split metrics (reconciled to the 5-head model)
+test.py  —  single-checkpoint TEST-split metrics (3-head model)
 =================================================================================
 Loads one checkpoint, builds the test loader (with the matching retriever if the
-checkpoint is a RAG condition), calls train.evaluate() and unpacks ALL 10 values
-(5 heads: O/A/B/C multi-label + D severity), and prints per-head metrics.
+checkpoint is a RAG condition), calls train.evaluate() and unpacks ALL 6 values
+(3 heads: B/C multi-label + D severity; org/sup is a structured context input),
+applies the checkpoint's tuned thresholds, and prints per-step metrics.
 
 Usage:
   python models/lstm/test.py --input data/ntsb_subset.csv --checkpoint results/c1.pt
@@ -22,38 +23,40 @@ sys.path.insert(0, _ROOT)
 sys.path.insert(0, os.path.join(_ROOT, "data"))
 import ntsbdataloader as N                              # noqa: E402
 from ntsbdataloader import NTSBEncoders, load_and_join, _split  # noqa: E402
-from models.lstm.train import HFACSCausalLSTM, evaluate  # noqa: E402
+from models.lstm.train import make_model, evaluate  # noqa: E402
 from models.lstm import eval as E                       # noqa: E402  (reuse helpers)
 
 
 def run(split_name, df_split, df_train, args):
     ck = torch.load(args.checkpoint, weights_only=False)
-    cfg = ck["config"]; n_D = cfg["n_D"]
-    is_rag = cfg["step_a_dim"] > N.N_O
+    cfg = ck["config"]
+    if "step_ctx_dim" not in cfg:
+        raise SystemExit("Pre-redesign checkpoint — retrain with the current train.py.")
+    n_D = cfg["n_D"]
+    thr = ck.get("thresholds")
+    is_rag = cfg["step_b_dim"] > N.STEP_B_BASE     # precond prior appended -> larger step_b
     retr = E._retriever(args.strategy, args.model, {}) if is_rag else None
     encoders = NTSBEncoders(df_train)
     loader = E._loader(df_split, encoders, retr, args.batch_size)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = HFACSCausalLSTM(**cfg).to(device)
+    model = make_model(cfg).to(device)
     model.load_state_dict(ck["state_dict"]); model.eval()
 
-    # exactly 10 values
-    aO, aA, aB, aC, aD, pO, pA, pB, pC, pD = evaluate(model, loader, device)
+    # exactly 6 values (B/C multi-label + D severity)
+    aB, aC, aD, pB, pC, pD = evaluate(model, loader, device, thr)
     print(f"\n{split_name} metrics  ({len(aD)} records, "
           f"{'C4-style RAG' if is_rag else 'C1 no-RAG'})")
-    for pre, y, p in (("O Organizational", aO, pO), ("A Supervisory", aA, pA),
-                      ("B Preconditions", aB, pB), ("C Unsafe Acts", aC, pC)):
+    for pre, y, p in (("B Preconditions", aB, pB), ("C Unsafe Acts", aC, pC)):
         k = pre.split()[0]
-        m = E.head_ml_metrics(k, y, p)
-        print(f"  {pre:18} microF1={m[k+'_microF1']:.3f} macroF1={m[k+'_macroF1']:.3f} "
-              f"P={m[k+'_P']:.3f} R={m[k+'_R']:.3f} exact={m[k+'_exact']:.3f} "
+        m = E.ml_metrics(k, y, p)
+        print(f"  {pre:18} F1={m[k+'_F1']:.3f} acc={m[k+'_accuracy']:.3f} "
               f"(pos={m[k+'_support']})")
     sev, _ = E.severity_metrics(aD, pD, n_D)
-    print(f"  D Severity         acc={sev['D_accuracy']:.3f} bal_acc={sev['D_balanced_acc']:.3f} "
-          f"macroF1={sev['D_macroF1']:.3f} kappa={sev['D_kappa']:.3f}")
+    print(f"  D Severity         F1={sev['D_F1']:.3f} acc={sev['D_accuracy']:.3f} "
+          f"bal_acc={sev['D_balanced_acc']:.3f} kappa={sev['D_kappa']:.3f}")
     print(f"  chain_completion_rate="
-          f"{E.chain_completion_rate(aO,aA,aB,aC,aD,pO,pA,pB,pC,pD):.3f}")
+          f"{E.chain_completion_rate(aB,aC,aD,pB,pC,pD):.3f}")
     if retr is not None:
         retr.close()
 
