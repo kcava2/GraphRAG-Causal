@@ -1,0 +1,25 @@
+# stage 4 clear graph
+# 2026-09-03 09:18:40
+# C:\Users\garre\PycharmProjects\GraphRAG-Causal\.venv\Scripts\python.exe -c "
+import os
+from neo4j import GraphDatabase
+drv = GraphDatabase.driver(
+    os.environ["NEO4J_URI"],
+    auth=(os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"]),
+)
+db = os.environ.get("NEO4J_DATABASE", "neo4j")
+with drv.session(database=db) as s:
+    before = s.run("MATCH (n) RETURN count(n) AS n").single()["n"]
+    print("nodes before: %d" % before)
+    s.run("MATCH (n) DETACH DELETE n")
+    after = s.run("MATCH (n) RETURN count(n) AS n").single()["n"]
+    print("nodes after : %d" % after)
+    if after != 0:
+        raise SystemExit("graph not empty after DETACH DELETE")
+drv.close()
+print("graph cleared")
+"
+
+nodes before: 2149
+nodes after : 0
+graph cleared
