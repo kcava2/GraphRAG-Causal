@@ -46,39 +46,7 @@ NTSB_CLEAN = os.path.join(_HERE, "ntsb_clean.csv")
 HFACS_RESULTS = os.path.join(_HERE, "hfacs_results.csv")
 FAISS_INDEX = os.path.join(_HERE, "ntsb.faiss")
 FAISS_IDMAP = os.path.join(_HERE, "ntsb_faiss_ids.json")
-# Two DIFFERENT sentence encoders, deliberately.
-#
-#   SBERT_MODEL      Stage-2 extraction few-shot (data/ntsb.faiss). Pinned to
-#                    all-MiniLM-L6-v2 because that index is what the committed
-#                    extraction was produced with; changing it would silently alter
-#                    the prompts and break comparability with hfacs_results.csv.
-#
-#   RETRIEVAL_MODEL  Stage-5 retrieval — the LOFO pool, the query encoding, and the
-#                    asias/asrs/ntsb_kg FAISS indexes. Free to improve, because
-#                    nothing downstream of it is already committed to disk except
-#                    those indexes, which are rebuilt together with it.
-#
-# Chosen by measuring the retrieval vote directly on the test split (k=5, no model).
-# AUC is the metric that matters, because the vote enters the model as a FEATURE —
-# what counts is whether it RANKS records correctly, not whether it clears 0.5:
-#
-#     encoder             B auc   C auc   D auc      B balacc  C balacc  D balacc
-#     all-MiniLM-L6-v2    0.671   0.708   0.905        0.589     0.531     0.827
-#     all-mpnet-base-v2   0.763   0.773   0.965        0.631     0.495     0.926  <- chosen
-#     bge-base-en-v1.5    0.736   0.647   0.932        0.598     0.497     0.870
-#     e5-base-v2          0.705   0.501   0.953        0.580     0.495     0.892
-#
-# mpnet wins on all three heads by AUC. Note C: its thresholded balanced accuracy
-# looks WORSE than MiniLM's (0.495 vs 0.531) while its AUC is better (0.773 vs
-# 0.708). C is only 9% positive, so a 0.5 cut on the vote almost never fires and
-# measures the threshold rather than the ranking. Judging encoders on the
-# thresholded number would have picked the weaker one.
-#
-# **Changing RETRIEVAL_MODEL requires rebuilding the FAISS indexes**
-# (`python data/kg_builder.py --faiss-only`): query vectors from a 768-dim encoder
-# cannot be searched against a 384-dim index.
 SBERT_MODEL = "all-MiniLM-L6-v2"
-RETRIEVAL_MODEL = os.environ.get("RETRIEVAL_MODEL", "all-mpnet-base-v2")
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +275,7 @@ class FewShotSource:
         try:
             import faiss
             from sentence_transformers import SentenceTransformer
-            self._sbert = SentenceTransformer(RETRIEVAL_MODEL)
+            self._sbert = SentenceTransformer(SBERT_MODEL)
             emb = np.asarray(self._sbert.encode(self._texts, normalize_embeddings=True),
                              dtype="float32")
             self._index = faiss.IndexFlatIP(emb.shape[1])
@@ -374,64 +342,19 @@ class GraphFewShotSource:
         self.raw_mode = raw_mode
         self._rows = {}
 
-    def attach_encoders(self, encoders: "NTSBEncoders", source_df: pd.DataFrame = None):
+    def attach_encoders(self, encoders: "NTSBEncoders"):
         """Build the exemplar rows. Deferred because the encoders are fit on the
-        train split inside get_dataloaders, after this source is constructed.
-
-        When `source_df` (the TRAIN split) is given, it is also registered on the
-        retriever as the in-distribution LOFO source and its records become
-        exemplars in their own right. This matters more than anything else here:
-        KG exemplars are mined from ASIAS/ASRS by `kg_builder` with a different
-        prompt, so their label distribution does not match the NTSB targets —
-
-            precond_operator     KG 16.2%   vs   NTSB target 71.7%
-            precond_situational  KG 43.5%   vs   NTSB target 20.6%
-
-        For head D that mismatch is survivable, because severity is a structured
-        field computed the same way for every source. For B and C, whose labels are
-        LLM-mined, KG exemplars are actively misleading. Train-split exemplars carry
-        exactly the target distribution, and LOFO self-exclusion keeps them honest:
-        a record never retrieves itself, and val/test records are not in the pool.
-        """
+        train split inside get_dataloaders, after this source is constructed."""
         if self._rows:
             return                                             # already built
         attrs = self.retriever.event_attributes() if self.retriever is not None else {}
         for key, a in attrs.items():
             self._rows[key] = self._build_row(a, encoders)
-        n_kg = len(self._rows)
-
-        n_train = 0
-        if source_df is not None and self.retriever is not None:
-            if hasattr(self.retriever, "set_source_df"):
-                self.retriever.set_source_df(source_df)        # activates LOFO
-            n_train = self._add_train_rows(source_df, encoders)
-
         sev_slice = slice(STEP_B_BASE + N_B + N_C, STEP_B_BASE + N_B + N_C + 2)
         n_sev = sum(1 for r in self._rows.values() if r[sev_slice].any())
-        print(f"  Graph few-shot source: {n_kg} KG events + {n_train} in-distribution "
-              f"train records ({n_sev} with severity)"
+        print(f"  Graph few-shot source: {len(self._rows)} events cached "
+              f"({n_sev} with severity)"
               f"{' [raw mode: no factor labels]' if self.raw_mode else ''}.")
-
-    def _add_train_rows(self, df: pd.DataFrame, e: "NTSBEncoders") -> int:
-        """Exemplar rows for the NTSB train split, keyed to match LOFO's output.
-
-        `LOFORetriever` returns neighbours as (ev_id, "NTSB"), so these are keyed
-        the same way. The 100 NTSB-KG events already in `_rows` come from the
-        disjoint `ntsb_kg_subset`, so there is no id collision.
-        """
-        df = df.reset_index(drop=True)
-        base = encode_step_b_base(df, e)
-        y_B = np.stack([_multihot(s, PRECOND_SUBS) for s in df["_pre"]]).astype("float32")
-        y_C = np.array([1 if UNSAFE_VIOLATION_TIER in s else 0 for s in df["_uns"]])
-        y_D = pd.to_numeric(df["severity_class"], errors="coerce").fillna(0).astype(int).to_numpy()
-        onehot = lambda v, n: np.eye(n, dtype="float32")[np.clip(v, 0, n - 1)]
-        mat = np.concatenate([base, y_B, onehot(y_C, N_C), onehot(y_D, 2)],
-                             axis=1).astype("float32")
-        if self.raw_mode:                       # C5: strip the LLM-mined labels
-            mat[:, STEP_B_BASE:STEP_B_BASE + N_B + N_C] = 0.0
-        for i, ev in enumerate(df["ev_id"].astype(str)):
-            self._rows[(ev, "NTSB")] = mat[i]
-        return len(df)
 
     def _build_row(self, a: dict, e: "NTSBEncoders") -> np.ndarray:
         from standardize import binarize_severity
@@ -732,9 +655,7 @@ def get_dataloaders(filepath: str = NTSB_CLEAN, test_split=0.2, val_split=0.1,
     elif fewshot_k == 0:
         fewshot_source = None
     if fewshot_source is not None and hasattr(fewshot_source, "attach_encoders"):
-        # df_train is passed so the source can register the in-distribution LOFO
-        # pool and use train records as exemplars (see attach_encoders).
-        fewshot_source.attach_encoders(encoders, df_train)
+        fewshot_source.attach_encoders(encoders)
 
     mk = lambda d, r: NTSBSequenceDataset(d, encoders, retriever=r,
                                           fewshot_source=fewshot_source,

@@ -2,3 +2,7 @@
 data/rawdata/
 *.pt
 *.md
+.backup_pre_iteration_20260906/
+
+# Claude Code local settings — contains the Neo4j password, must not be committed
+.claude/

@@ -113,18 +113,36 @@ def load(path: str) -> pd.DataFrame:
 
 
 def sub_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    """Binary (rows × subcategory) presence matrix from the hfacs dicts."""
+    """Binary (rows × subcategory) presence matrix from the hfacs dicts.
+
+    The mined label is the TIER; the values are FREE-TEXT evidence phrases, not
+    canonical subcategory names (`_validate_classifications` keeps the model's own
+    wording). Stronger models embed the canonical name inside that phrase —
+    "Loss of Situational Awareness (Tug Operator)" — so exact matching counts zero
+    and every panel comes out empty, which is what qwen3.8:27b output did.
+
+    Match both ways: exact first (older extractions stored canonical names), then
+    case-insensitive substring, scoped to the tier's OWN subcategories so a phrase
+    filed under one tier cannot light up another tier's subcategory.
+    """
     data = np.zeros((len(df), len(ALL_SUBS)), dtype=int)
     col_idx = {s: i for i, s in enumerate(ALL_SUBS)}
     for r, hfacs in enumerate(df["hfacs"]):
         if not isinstance(hfacs, dict):
             continue
         for tier, subs in hfacs.items():
-            if not isinstance(subs, list):
+            if not isinstance(subs, list) or tier not in HFACS_SCHEMA:
                 continue
             for s in subs:
-                if s in col_idx:
+                if not isinstance(s, str):
+                    continue
+                if s in col_idx:                          # legacy exact format
                     data[r, col_idx[s]] = 1
+                    continue
+                low = s.lower()
+                for canon in HFACS_SCHEMA[tier]:          # current free-text format
+                    if canon.lower() in low:
+                        data[r, col_idx[canon]] = 1
     return pd.DataFrame(data, columns=ALL_SUBS)
 
 

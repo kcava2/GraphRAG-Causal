@@ -46,7 +46,7 @@ if _HERE not in sys.path:
 from hfacs_extractor import DEFAULT_MODEL, _clean  # noqa: E402
 from ntsbdataloader import (  # noqa: E402  (label spaces — single source of truth)
     ORG_SUBS, SUP_SUBS, PRECOND_SUBS, PRECOND_GROUP_INDEX,
-    UNSAFE_VIOLATION_TIER, N_O, N_A, N_B, N_C, RETRIEVAL_MODEL,
+    UNSAFE_VIOLATION_TIER, N_O, N_A, N_B, N_C,
 )
 from standardize import binarize_severity  # noqa: E402  (KG severity -> high/low)
 
@@ -91,8 +91,7 @@ ASRS_IDMAP = os.path.join(_HERE, "asrs_id_map.csv")
 # sourced from the same population the LSTM predicts (counters domain shift).
 NTSB_FAISS = os.path.join(_HERE, "ntsb_kg.faiss")
 NTSB_IDMAP = os.path.join(_HERE, "ntsb_kg_id_map.csv")
-# Retrieval encoder: single source of truth is ntsbdataloader.RETRIEVAL_MODEL
-# (imported below). Do not redefine it here.
+SBERT_MODEL = "all-MiniLM-L6-v2"
 
 # Per-source FAISS weights. Default gives the in-distribution NTSB source the most
 # say; set two of three to 0 for the single-source ablations (C5/C6/C7).
@@ -240,7 +239,7 @@ class RAGRetriever:
     def _ensure_sbert(self):
         if self._sbert is None:
             from sentence_transformers import SentenceTransformer
-            self._sbert = SentenceTransformer(RETRIEVAL_MODEL)
+            self._sbert = SentenceTransformer(SBERT_MODEL)
         return self._sbert
 
     def close(self):
@@ -276,49 +275,11 @@ class RAGRetriever:
 
     # ---- Mode 2: deterministic schema-grounded Cypher structural search ----
     def _cypher_scores(self, record: dict) -> dict:
-        """Structural retrieval: score candidates by shared STRUCTURED CONTEXT.
-
-        Two sources, merged:
-
-        1. **In-distribution NTSB train records** via `LOFORetriever.context_neighbors`,
-           IDF-weighted. This is the important half. Before it existed, structural
-           retrieval was crippled three ways at once: the Cypher below excludes NTSB
-           outright, so it could only ever return ASIAS/ASRS (measured: 179 ASIAS,
-           21 ASRS, 0 NTSB); its score is a small integer count of shared context
-           nodes, giving only 5 distinct values with 3.2 of 5 returned candidates
-           tied at the top, so ranking among them was arbitrary; and it never touches
-           HFACSFactorNode or LEADS_TO, so despite the name it matches attributes,
-           not causal structure.
-        2. **KG events** via the fixed Cypher query, as before.
-
-        Note on "graph isomorphism on causal patterns" (spec 2.2 Strategy B): that
-        cannot be implemented as written. Matching a query's causal pattern requires
-        the query's HFACS factors, which ARE the prediction targets — using them
-        would leak the labels. Context matching is the leak-free substitute, and it
-        has the useful property of touching only PRE-NARRATIVE fields.
-        """
-        # Each sub-source is min-max normalized to [0,1] SEPARATELY and only then
-        # weighted. They are on incomparable scales — the Cypher score is a small
-        # integer count of shared context nodes (observed range 5-9), the
-        # in-distribution score is an IDF-weighted sum. Normalizing the merged dict
-        # instead put every in-distribution match at the bottom of the ranking.
-        ctx_scores = {}
-        if self._lofo is not None and self.ntsb_weight > 0:
-            for eid, sc in self._lofo.context_neighbors(
-                    record, str(record.get("ev_id", "")), self.k):
-                ctx_scores[(eid, "NTSB")] = float(sc)
-        # In-distribution matches occupy [0.5, 1.0]; KG matches [0, 0.5). The bands
-        # are disjoint ON PURPOSE. Weighting alone did not work: min-max maps each
-        # source's best to 1.0, so asias_weight (0.34) edged out ntsb_weight (0.33),
-        # and the Cypher side's integer scores tie 3-of-5 at the top and all inflate
-        # to 1.0 — between them the in-distribution matches were pushed out of every
-        # slot. A train record with the right label distribution is worth more than
-        # any ASIAS match here, so the ordering is made explicit rather than left to
-        # near-equal weights.
-        out = {k: 0.5 + 0.5 * v for k, v in _minmax(ctx_scores).items()}
+        """Score KG events by how many structured context fields they share with
+        the record, via one fixed parameterized query (no LLM). Returns
+        {(event_id, source): match_count}; empty on any failure."""
         if self.driver is None:
-            return out
-        kg_scores = {}
+            return {}
         try:
             params = {p: record.get(p, "") for p in CYPHER_PARAMS}
             # SDR maintenance bracket is computed (make+year), not a record column.
@@ -327,22 +288,17 @@ class RAGRetriever:
             params["k"] = self.k
             recs, _, _ = self.driver.execute_query(
                 _STRUCTURAL_CYPHER, database_=self.database, **params)
+            out = {}
             for r in recs:
                 d = r.data()
                 eid, src, score = d.get("event_id"), d.get("source"), d.get("score")
                 # NTSB structural matches are skipped: NTSB now comes from the LOFO
                 # source, and the on-disk Neo4j NTSB-KG slice is stale/leaky.
                 if eid is not None and src is not None and str(src) != "NTSB":
-                    kg_scores[(str(eid), str(src))] = float(score or 0.0)
-            w = {"ASIAS": self.asias_weight, "ASRS": self.asrs_weight}
-            for k, v in _minmax(kg_scores).items():
-                out[k] = 0.49 * v * w.get(k[1], 0.33) / max(self.asias_weight,
-                                                            self.asrs_weight, 1e-9)
+                    out[(str(eid), str(src))] = float(score if score is not None else 0.0)
             return out
         except Exception as e:
-            logging.warning("RAG: structural Cypher failed (%s) — in-distribution "
-                            "matches (if any) are kept.", e)
-            return out
+            logging.warning("RAG: structural Cypher failed (%s) — skipping.", e)
             return {}
 
     # ---- combine + factor lookup ----
@@ -560,46 +516,6 @@ class LOFORetriever:
         self._sbert = None
         self._index = None
         self._build_index()
-        self._build_context_table(source_df)
-
-    # ---- in-distribution STRUCTURAL retrieval (pre-narrative fields only) ------
-    def _build_context_table(self, source_df):
-        """Per-record structured context + IDF weights, for `context_neighbors`."""
-        self._ctx = [{p: str(source_df.iloc[i].get(p, "") or "") for p in CYPHER_PARAMS}
-                     for i in range(len(source_df))]
-        # IDF over each (feature, value): matching a RARE value is far more
-        # informative than matching "visual_condition=VMC", which nearly everything
-        # shares. Without this the score is a small integer count and most
-        # candidates tie, which is precisely what crippled the Cypher version.
-        n = max(len(self._ctx), 1)
-        counts = {}
-        for row in self._ctx:
-            for f, v in row.items():
-                counts[(f, v)] = counts.get((f, v), 0) + 1
-        self._idf = {k: float(np.log(n / c)) for k, c in counts.items()}
-
-    def context_neighbors(self, record: dict, exclude_id: str, k: int) -> list:
-        """Top-k (ev_id, score) by IDF-weighted agreement on STRUCTURED context.
-
-        Uses only fields knowable before the narrative exists — weather, light,
-        crew, economic brackets — so a condition built on this retrieves without
-        touching outcome-revealing text. Self-excluding, train split only.
-        """
-        if not self._ctx:
-            return []
-        q = {p: str(record.get(p, "") or "") for p in CYPHER_PARAMS}
-        out = []
-        for i, row in enumerate(self._ctx):
-            if self.ids[i] == str(exclude_id):
-                continue                                       # self-exclusion
-            s = 0.0
-            for f, v in q.items():
-                if v and v.lower() not in ("", "nan", "unknown") and row.get(f) == v:
-                    s += self._idf.get((f, v), 0.0)
-            if s > 0:
-                out.append((self.ids[i], s))
-        out.sort(key=lambda kv: kv[1], reverse=True)
-        return out[:k]
 
     # ---- source API (used when LOFO is the NTSB source inside RAGRetriever) ----
     def neighbors(self, text: str, exclude_id: str, k: int) -> list:
@@ -631,7 +547,7 @@ class LOFORetriever:
         try:
             import faiss
             from sentence_transformers import SentenceTransformer
-            self._sbert = SentenceTransformer(RETRIEVAL_MODEL)
+            self._sbert = SentenceTransformer(SBERT_MODEL)
             emb = np.asarray(self._sbert.encode(self._texts, normalize_embeddings=True),
                              dtype="float32")
             self._index = faiss.IndexFlatIP(emb.shape[1])

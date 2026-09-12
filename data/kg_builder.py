@@ -54,8 +54,9 @@ from hfacs_extractor import (  # noqa: E402
     _call_ollama, _extract_json,
     _validate_classifications, _validate_relationships,
     _resolve_model, _clean, _GEN_OPTIONS,
-    DEFAULT_MODEL, SBERT_MODEL,
+    DEFAULT_MODEL,
 )
+from ntsbdataloader import RETRIEVAL_MODEL  # noqa: E402  (FAISS must match retrieval)
 
 import json  # noqa: E402  (after the package import block, mirrors extractor style)
 
@@ -619,8 +620,8 @@ def build_faiss(writer: KGWriter, source: str, limit=None, path=None):
     texts = [_faiss_text(row, source) for _, row in df.iterrows()]
     ids = [_clean(row.get(_ID_COL[source])) for _, row in df.iterrows()]
 
-    logging.info("%s: embedding %d narratives with %s", source, len(texts), SBERT_MODEL)
-    model = SentenceTransformer(SBERT_MODEL)
+    logging.info("%s: embedding %d narratives with %s", source, len(texts), RETRIEVAL_MODEL)
+    model = SentenceTransformer(RETRIEVAL_MODEL)
     emb = model.encode(texts, normalize_embeddings=True, show_progress_bar=True)
     emb = np.asarray(emb, dtype="float32")
 

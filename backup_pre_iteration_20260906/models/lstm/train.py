@@ -145,41 +145,20 @@ class FewShotEncoder(nn.Module):
 
     def __init__(self, fewshot_dim: int, out_dim: int = 32, dropout: float = 0.1):
         super().__init__()
+        self.out_dim = out_dim
         self.lstm = nn.LSTM(fewshot_dim, out_dim, batch_first=True)
         self.drop = nn.Dropout(dropout)
-        # The encoder emits the learned summary AND the explicit similarity-weighted
-        # vote, so `out_dim` seen by the rest of the model is the sum of the two.
-        self.out_dim = out_dim + fewshot_dim
 
     def forward(self, fewshot, fewshot_mask):
-        """-> [batch, out_dim + fewshot_dim]: learned summary || weighted vote.
-
-        The learned half is an LSTM over the exemplar sequence, masked-mean-pooled.
-        The second half is the similarity-weighted mean of the raw exemplar rows —
-        the k-NN vote, computed rather than learned.
-
-        Concatenating the vote matters a great deal in practice. Measured directly
-        on the test split, a weighted vote over these exemplars predicts severity at
-        kappa 0.63, but a model given only the LSTM summary reached ~0.00: to
-        recover the vote the LSTM would have to learn, from 710 records, to attend
-        to the label columns and reweight them by the similarity column. Handing it
-        the aggregate is an inductive bias, not extra information — every value here
-        is a deterministic function of the exemplar block the model already sees.
-        """
+        # fewshot [batch, k, dim]; mask [batch, k] (1 = real exemplar)
         if fewshot is None or fewshot.numel() == 0 or fewshot.size(1) == 0:
-            n = fewshot.size(0) if fewshot is not None else 0
-            return torch.zeros(n, self.out_dim, device=fewshot.device)
+            return torch.zeros(fewshot.size(0) if fewshot is not None else 0,
+                               self.out_dim, device=fewshot.device)
+        out, _ = self.lstm(fewshot)                       # [batch, k, out_dim]
         m = fewshot_mask.unsqueeze(-1)                    # [batch, k, 1]
-
-        out, _ = self.lstm(fewshot)                       # [batch, k, lstm_out]
-        pooled = (out * m).sum(1) / m.sum(1).clamp(min=1.0)
-
-        sim = fewshot[..., -1:].clamp(min=0.0) * m        # retrieval score, masked
-        w = sim / sim.sum(1, keepdim=True).clamp(min=1e-6)
-        vote = (fewshot * w).sum(1)                       # [batch, fewshot_dim]
-        vote = vote * (m.sum(1) > 0).float()              # no exemplars -> zeros
-
-        return self.drop(torch.cat([pooled, vote], dim=1))
+        denom = m.sum(1).clamp(min=1.0)                   # no exemplars -> zeros
+        pooled = (out * m).sum(1) / denom
+        return self.drop(pooled)
 
 
 class HFACSCausalLSTM(nn.Module):
@@ -204,65 +183,32 @@ class HFACSCausalLSTM(nn.Module):
         # C1..C8 checkpoints load and behave identically.
         self.fewshot_enc = FewShotEncoder(fewshot_dim, fewshot_out, dropout) \
             if fewshot_dim > 0 else None
-        # The encoder emits learned summary || weighted vote, so its width is
-        # fewshot_out + fewshot_dim. Read it off the module rather than assuming.
-        fs_width = self.fewshot_enc.out_dim if self.fewshot_enc is not None else 0
-        ctx_in = step_ctx_dim + fs_width
+        ctx_in = step_ctx_dim + (fewshot_out if fewshot_dim > 0 else 0)
 
         self.cell_ctx = nn.LSTMCell(ctx_in, hidden_size)   # context root (no head)
-        # B takes the exemplars as DIRECT input too. Routing them only through
-        # hCtx left B the one head without first-hand access to retrieval,
-        # while C and D received fs_emb concatenated into their projections.
-        self.cell_b = nn.LSTMCell(self._b_in + fs_width, hidden_size)
+        self.cell_b = nn.LSTMCell(self._b_in, hidden_size)
         self.cell_c = nn.LSTMCell(hidden_size, hidden_size)
         self.cell_d = nn.LSTMCell(hidden_size, hidden_size)
         self.drop = nn.Dropout(dropout)
 
-        # Exemplars feed EVERY node, not just the root. Reaching only the root made
-        # them useless to C and D: the chain detaches its soft predictions, so by the
-        # time information travelled ctx -> B -> C -> D there was no path left for
-        # retrieval to inform severity. The prior mechanism fed each head directly
-        # (precond->B, unsafe->C, severity->D); exemplars now do the same.
-        fs = fs_width
-        self._fs = fs
-
         # Skip-edges (causal_discovery validates these); prior slots add when present.
-        self.proj_c = nn.Linear(n_B + 3 + 2 + c_extra + fs, hidden_size)   # [soft_B|env|oper|prior|fewshot]
-        self.proj_d = nn.Linear(n_C + n_B + 3 + d_extra + fs, hidden_size) # [soft_C|soft_B|env|prior|fewshot]
+        self.proj_c = nn.Linear(n_B + 3 + 2 + c_extra, hidden_size)   # [soft_B|env|oper|unsafe_prior]
+        self.proj_d = nn.Linear(n_C + n_B + 3 + d_extra, hidden_size) # [soft_C|soft_B|env|sev_prior]
 
         self.head_b = nn.Linear(hidden_size, n_B)
         self.head_c = nn.Linear(hidden_size, n_C)
         self.head_d = nn.Linear(hidden_size, n_D)
 
     def forward(self, step_ctx, step_b, fewshot=None, fewshot_mask=None):
-        """context -> B -> C -> D, with hidden state carrying GRADIENT.
-
-        The hidden-state handoffs used to be detached (`hCtx.detach()` etc.). That
-        was a bug, not a design choice: `cell_ctx` has no head of its own, so the
-        handoff was its only gradient path. Detaching it left the context root AND
-        the FewShotEncoder feeding it randomly initialised and never updated —
-        retrieval could not influence any prediction, and `step_ctx` (the economic
-        context) was inert.
-
-        What legitimately stays detached is the SOFT PREDICTIONS (`soft_B`,
-        `soft_C`). Those carry a head's *output* forward as evidence, and detaching
-        them keeps each head trained by its own loss rather than by the losses of
-        heads downstream. The causal chain is unchanged; it can now learn.
-        """
         batch = step_b.size(0)
         zeros = lambda: torch.zeros(batch, self.hidden_size, device=step_b.device)
-
-        fs_emb = None
         if self.fewshot_enc is not None:
-            fs_emb = self.fewshot_enc(fewshot, fewshot_mask)
-            step_ctx = torch.cat([step_ctx, fs_emb], 1)
+            step_ctx = torch.cat([step_ctx,
+                                  self.fewshot_enc(fewshot, fewshot_mask)], 1)
         hCtx, cCtx = self.cell_ctx(step_ctx, (zeros(), zeros()))
 
-        # B <- base step_b (+ precond prior) + exemplars, seeded by the context root
-        b_in = step_b[:, :self._b_in]
-        if fs_emb is not None:
-            b_in = torch.cat([b_in, fs_emb], 1)          # retrieval -> B, directly
-        hB, cB = self.cell_b(b_in, (hCtx, cCtx))
+        # B <- base step_b (+ precond prior), seeded by the context root
+        hB, cB = self.cell_b(step_b[:, :self._b_in], (hCtx.detach(), cCtx.detach()))
         logits_B = self.head_b(self.drop(hB))
         soft_B = torch.sigmoid(logits_B).detach()
 
@@ -272,18 +218,14 @@ class HFACSCausalLSTM(nn.Module):
         c_parts = [soft_B, env, oper]
         if self.has_priors:
             c_parts.append(step_b[:, self.unsafe_slice])
-        if fs_emb is not None:
-            c_parts.append(fs_emb)                     # retrieval -> C, directly
-        hC, cC = self.cell_c(self.proj_c(torch.cat(c_parts, 1)), (hB, cB))
+        hC, cC = self.cell_c(self.proj_c(torch.cat(c_parts, 1)), (hB.detach(), cB.detach()))
         logits_C = self.head_c(self.drop(hC))
         soft_C = torch.softmax(logits_C, 1).detach()   # C is single-label (violation vs error)
 
         d_parts = [soft_C, soft_B, env]
         if self.has_priors:
             d_parts.append(step_b[:, self.sev_slice])
-        if fs_emb is not None:
-            d_parts.append(fs_emb)                     # retrieval -> D, directly
-        hD, _ = self.cell_d(self.proj_d(torch.cat(d_parts, 1)), (hC, cC))
+        hD, _ = self.cell_d(self.proj_d(torch.cat(d_parts, 1)), (hC.detach(), cC.detach()))
         logits_D = self.head_d(self.drop(hD))
         return logits_B, logits_C, logits_D
 
@@ -310,8 +252,7 @@ class HFACSCausalSCM(nn.Module):
         # Exemplars enter on the context (root) equation, matching the LSTM variant.
         self.fewshot_enc = FewShotEncoder(fewshot_dim, fewshot_out, dropout) \
             if fewshot_dim > 0 else None
-        ctx_in = step_ctx_dim + (self.fewshot_enc.out_dim
-                                 if self.fewshot_enc is not None else 0)
+        ctx_in = step_ctx_dim + (fewshot_out if fewshot_dim > 0 else 0)
 
         self.f_B = mlp(ctx_in + self._b_in, n_B)              # B <- context + base(+precond)
         self.f_C = mlp(n_B + 3 + 2 + c_extra, n_C)            # C <- soft_B|env|oper|unsafe_prior
@@ -347,7 +288,7 @@ def make_model(config: dict):
     arch = cfg.pop("arch", "lstm")
     # Bookkeeping recorded in the checkpoint so eval can rebuild the condition
     # (exemplar count, retrieval strategy, raw mode) — none are model arguments.
-    for k in ("fewshot_k", "condition", "strategy", "raw_mode", "seed"):
+    for k in ("fewshot_k", "condition", "strategy", "raw_mode"):
         cfg.pop(k, None)
     return _ARCHS[arch](**cfg)
 
@@ -483,20 +424,9 @@ def _build_criteria(train_set, n_C, n_D, device, baseline=False):
 
 def train_model(train_loader, val_loader, encoders, hidden_size=128, lr=1e-4,
                 dropout=0.1, epochs=500, patience=200, device=None, verbose=True,
-                arch="lstm", baseline=False, seed=None):
-    """Train one condition. `seed` fixes weight init AND batch order.
-
-    Without it, two runs of the SAME condition differed by ~0.04 kappa on head D —
-    larger than any gap between the retrieval conditions, which made the comparison
-    meaningless. Seeding is what lets repeated runs be averaged and compared.
-    """
+                arch="lstm", baseline=False):
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if seed is not None:
-        torch.manual_seed(seed)                 # weight init + DataLoader shuffling
-        np.random.seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
 
     # Infer dims from the first batch — never hardcoded. fewshot is [batch, k, dim];
     # k == 0 means exemplars are disabled, so fewshot_dim stays 0 and no encoder is

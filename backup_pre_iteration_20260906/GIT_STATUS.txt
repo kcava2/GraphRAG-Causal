@@ -1,0 +1,30 @@
+ M .gitignore
+ M data/__pycache__/ntsbdataloader.cpython-311.pyc
+ M data/hfacs_analysis.py
+ M data/ntsbdataloader.py
+ M data/rag_retriever.py
+ M figures/causal_dag_schema.png
+ M figures/data_quality.png
+ M figures/extraction_coverage.png
+ M figures/hfacs_combinations.png
+ M figures/hfacs_cooccurrence.png
+ M figures/hfacs_coverage.png
+ M figures/hfacs_distributions.png
+ M figures/hfacs_relationships.png
+ M figures/hfacs_severity.png
+ M figures/hfacs_tier_counts.png
+ M models/lstm/__pycache__/train.cpython-311.pyc
+ M models/lstm/train.py
+ M results/c1.pt
+ M results/c4.pt
+?? .claude/
+?? backup_pre_iteration_20260906/
+?? data/__pycache__/rag_retriever.cpython-311.pyc
+?? figures/cond_kappa.png
+?? figures/cond_mcnemar_table.png
+?? figures/cond_metrics_table.png
+?? figures/cond_performance.png
+?? models/lstm/eval_conditions.py
+?? results/conditions_mcnemar.csv
+?? results/conditions_metrics.csv
+?? run_conditions.py

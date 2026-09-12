@@ -1,0 +1,13 @@
+condition,head,"helps (RAG right, C1 wrong)","hurts (C1 right, RAG wrong)",net,p_value,significant
+C2,B,1,0,1,1.0,no
+C2,C,0,0,0,1.0,no
+C2,D,7,5,2,0.77441,no
+C3,B,0,0,0,1.0,no
+C3,C,0,0,0,1.0,no
+C3,D,6,4,2,0.75391,no
+C4,B,1,0,1,1.0,no
+C4,C,0,0,0,1.0,no
+C4,D,9,8,1,1.0,no
+C5,B,0,0,0,1.0,no
+C5,C,0,0,0,1.0,no
+C5,D,7,5,2,0.77441,no
