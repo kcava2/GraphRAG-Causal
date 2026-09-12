@@ -19,6 +19,7 @@ Shared feature domains produced here:
     - employment/fuel QoQ bracket : see bracket_qoq()
 """
 
+import re
 import math
 
 
@@ -494,3 +495,61 @@ def map_pilot_certificate(c40) -> str:
     if "student" in lower:
         return "Student"
     return "Other"
+
+
+# ---------------------------------------------------------------------------
+# Outcome stripping — for RETRIEVAL text only
+# ---------------------------------------------------------------------------
+
+# Sentences that state what happened TO the aircraft or the people. These are the
+# outcome, i.e. the D target, written in prose.
+_OUTCOME_RE = re.compile(
+    r"\b("
+    r"substantial(ly)?\s+damag|destroy|minor\s+damag|no\s+damag|damage\s+to\s+the\s+(air|fuselage|wing)"
+    r"|hull\s+loss|written\s+off|burn(ed|t)?\s+out|consumed\s+by\s+fire"
+    r"|injur|fatal|uninjured|was\s+killed|were\s+killed|death|deceased"
+    r")", re.IGNORECASE)
+
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def strip_outcome(text: str) -> str:
+    """Remove sentences that state the accident's OUTCOME.
+
+    Used only when embedding text for RETRIEVAL. It is never applied to Stage-2
+    extraction, whose committed output depends on the full narrative.
+
+    Why this exists: NTSB narratives describe what happened to the aircraft and
+    its occupants, so the severity target is written into the query's own text.
+    Retrieving by raw-narrative similarity therefore matches "substantially
+    damaged" against "substantially damaged" and copies the neighbour's severity —
+    measured at D balanced accuracy 0.921, against 0.573 when retrieval used only
+    pre-narrative structured context. That gap is outcome matching, not prediction.
+
+    This does NOT discard the neighbours' outcomes: their y_D labels are untouched
+    and are exactly what retrieval is meant to supply. It removes the *query's*
+    statement of its own answer, so neighbours are found by the circumstances and
+    causal factors that led to the event rather than by how it ended.
+
+    **MEASURED LIMITATION — read before relying on this.** It removes far less
+    than intended. TF-IDF over the stripped text still predicts severity at
+    balanced accuracy 0.914 (kappa 0.839), against 0.923 (0.858) on raw text: only
+    ~0.01 of the signal is gone. NTSB narratives reveal the outcome in many more
+    ways than damage and injury sentences -- "came to rest inverted", "the engine
+    separated", "passengers evacuated", "runway excursion". Head D moved 0.921 ->
+    0.897 with this enabled, which is consistent with removing ~1% of the signal
+    rather than removing the shortcut. Genuinely pre-outcome retrieval text needs
+    an LLM pass that rewrites each narrative as circumstances-only; a regex over
+    result sentences cannot get there.
+
+    Falls back to the original only if stripping leaves essentially nothing. The
+    floor is deliberately a small ABSOLUTE one, not a proportion: a proportional
+    floor would restore the full text — outcome included — for exactly the
+    narratives that are mostly outcome, which are the ones this most needs to
+    handle. A short factor-only query is still better than one stating its answer.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return ""
+    kept = [s for s in _SENT_SPLIT.split(text) if not _OUTCOME_RE.search(s)]
+    out = " ".join(kept).strip()
+    return out if len(out) >= 40 else text

@@ -27,6 +27,7 @@ No SMOTE, no synthetic data.
 """
 
 import json
+import logging
 import os
 import sys
 
@@ -39,8 +40,8 @@ from sklearn.preprocessing import LabelEncoder
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:                 # allow sibling import whether run as a
     sys.path.insert(0, _HERE)             # script (cwd=data/) or as data.ntsbdataloader
-from hfacs_extractor import HFACS_SCHEMA  # single source of truth for the schema
-from standardize import SEVERITY_HIGH_THRESHOLD  # binary severity threshold
+from hfacs_extractor import HFACS_SCHEMA, EXTRACT_TIERS  # single source of truth
+from standardize import SEVERITY_HIGH_THRESHOLD, strip_outcome  # noqa
 
 NTSB_CLEAN = os.path.join(_HERE, "ntsb_clean.csv")
 HFACS_RESULTS = os.path.join(_HERE, "hfacs_results.csv")
@@ -262,8 +263,43 @@ def encode_step_b_base(df: pd.DataFrame, e: "NTSBEncoders") -> np.ndarray:
     ]).astype("float32")
 
 
-# [base features (5) | y_B (3) | y_C one-hot (2) | y_D one-hot (2) | similarity (1)]
-FEWSHOT_DIM = STEP_B_BASE + N_B + N_C + 2 + 1
+# ---------------------------------------------------------------------------
+# Causal-chain encoding for exemplars
+# ---------------------------------------------------------------------------
+# Each exemplar carries the CAUSAL CHAIN the extractor found in that event, as a
+# role vector over the 10 mined tiers: for each tier, was it the SOURCE of a
+# LEADS_TO edge, and was it the TARGET of one.
+#
+# Why roles from the EXTRACTED edges, and not the graph's LEADS_TO:
+# `kg_builder.classify_edge` derives graph LEADS_TO deterministically from
+# DAG_EDGES given which factors co-occur. That makes those edges a pure function
+# of the tier set the exemplar already encodes in y_B/y_C — reading them back
+# would add exactly zero information, which is why nothing reading them has cost
+# nothing. The LLM-extracted relationships are independent evidence: the model
+# chose specific directed links with supporting quotes, and they frequently do NOT
+# follow the DAG (the three most common are unsafe_decision -> unsafe_skill,
+# unsafe_perception -> unsafe_decision, unsafe_decision -> unsafe_violation, none
+# of which is a DAG edge). Those carry real signal about chain ORDER, beyond which
+# tiers are present.
+CAUSAL_TIERS = list(EXTRACT_TIERS)
+CAUSAL_DIM = 2 * len(CAUSAL_TIERS)        # [is-source x10 | is-target x10]
+_CAUSAL_IDX = {t: i for i, t in enumerate(CAUSAL_TIERS)}
+
+
+def causal_roles(edges) -> np.ndarray:
+    """Directed tier pairs -> role vector. `edges` is an iterable of (src, dst)."""
+    v = np.zeros(CAUSAL_DIM, dtype="float32")
+    for src, dst in edges or []:
+        i, j = _CAUSAL_IDX.get(src), _CAUSAL_IDX.get(dst)
+        if i is not None:
+            v[i] = 1.0                                    # tier acted as a cause
+        if j is not None:
+            v[len(CAUSAL_TIERS) + j] = 1.0                # tier acted as an effect
+    return v
+
+
+# [base (5) | y_B (3) | y_C one-hot (2) | y_D one-hot (2) | causal roles (20) | similarity (1)]
+FEWSHOT_DIM = STEP_B_BASE + N_B + N_C + 2 + CAUSAL_DIM + 1
 
 
 class FewShotSource:
@@ -287,7 +323,8 @@ class FewShotSource:
     def __init__(self, source_df: pd.DataFrame, encoders: "NTSBEncoders"):
         df = source_df.reset_index(drop=True)
         self.ids = df["ev_id"].astype(str).tolist()
-        self._texts = df["combined_text"].astype(str).fillna("").tolist()
+        self._texts = [strip_outcome(t) for t in           # retrieval text only
+                       df["combined_text"].astype(str).fillna("").tolist()]
 
         base = encode_step_b_base(df, encoders)
         y_B = np.stack([_multihot(s, PRECOND_SUBS) for s in df["_pre"]]).astype("float32")
@@ -296,8 +333,14 @@ class FewShotSource:
 
         onehot = lambda v, n: np.eye(n, dtype="float32")[np.clip(v, 0, n - 1)]
         # Columns are laid out to match FEWSHOT_DIM; similarity is filled per query.
+        chains = _train_causal_roles(df)          # extracted causal chain per record
         self.matrix = np.concatenate(
-            [base, y_B, onehot(y_C, N_C), onehot(y_D, 2)], axis=1).astype("float32")
+            [base, y_B, onehot(y_C, N_C), onehot(y_D, 2), chains],
+            axis=1).astype("float32")
+        if self.matrix.shape[1] != FEWSHOT_DIM - 1:
+            raise ValueError(f"exemplar width {self.matrix.shape[1]} != "
+                             f"{FEWSHOT_DIM - 1}; FEWSHOT_DIM and the column "
+                             f"blocks have drifted apart")
 
         self._sbert = None
         self._index = None
@@ -326,7 +369,8 @@ class FewShotSource:
         if self._index is None or not text.strip():
             return out, mask
         try:
-            emb = np.asarray(self._sbert.encode([text], normalize_embeddings=True),
+            emb = np.asarray(self._sbert.encode([strip_outcome(text)],
+                                                normalize_embeddings=True),
                              dtype="float32")
             sims, idx = self._index.search(emb, min(k + 1, len(self.ids)))
             used = 0
@@ -339,9 +383,31 @@ class FewShotSource:
                 used += 1
                 if used >= k:
                     break
-        except Exception:
-            pass                                              # zeros = "no exemplars"
+        except Exception as exc:
+            # Narrow, and loud. A bare pass here previously swallowed a column-count
+            # mismatch and returned an all-zero mask, which looks exactly like
+            # "nothing retrieved" — the failure mode is invisible at the call site.
+            logging.warning("FewShotSource.lookup failed (%s) — no exemplars for %s",
+                            exc, exclude_id)
         return out, mask
+
+
+def _train_causal_roles(df: pd.DataFrame) -> np.ndarray:
+    """[n, CAUSAL_DIM] role vectors from hfacs_results.csv relationships_json."""
+    rel = {}
+    try:
+        r = pd.read_csv(HFACS_RESULTS, dtype=str)
+        r = r[r["extraction_status"] == "success"]
+        for ev, js in zip(r["ev_id"].astype(str), r["relationships_json"].fillna("[]")):
+            try:
+                items = json.loads(js)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            rel[ev] = [(e.get("subject"), e.get("object")) for e in items
+                       if isinstance(e, dict) and e.get("relation") == "LEADS_TO"]
+    except Exception:
+        pass
+    return np.stack([causal_roles(rel.get(str(ev), [])) for ev in df["ev_id"]])
 
 
 class GraphFewShotSource:
@@ -425,7 +491,11 @@ class GraphFewShotSource:
         y_C = np.array([1 if UNSAFE_VIOLATION_TIER in s else 0 for s in df["_uns"]])
         y_D = pd.to_numeric(df["severity_class"], errors="coerce").fillna(0).astype(int).to_numpy()
         onehot = lambda v, n: np.eye(n, dtype="float32")[np.clip(v, 0, n - 1)]
-        mat = np.concatenate([base, y_B, onehot(y_C, N_C), onehot(y_D, 2)],
+        # Causal chains for train records come from the extractor's own
+        # relationships_json (task 2), the same LLM-extracted edges the KG stores
+        # with evidence — so both exemplar sources encode chains identically.
+        chains = _train_causal_roles(df)
+        mat = np.concatenate([base, y_B, onehot(y_C, N_C), onehot(y_D, 2), chains],
                              axis=1).astype("float32")
         if self.raw_mode:                       # C5: strip the LLM-mined labels
             mat[:, STEP_B_BASE:STEP_B_BASE + N_B + N_C] = 0.0
@@ -454,6 +524,10 @@ class GraphFewShotSource:
             if tiers:                                          # C only when known
                 v = 1 if UNSAFE_VIOLATION_TIER in tiers else 0
                 row[STEP_B_BASE + N_B + v] = 1.0
+
+        roles = causal_roles(a.get("causal"))                  # extracted chain
+        row[STEP_B_BASE + N_B + N_C + 2:
+            STEP_B_BASE + N_B + N_C + 2 + CAUSAL_DIM] = roles
 
         sev = a.get("severity")                                # structured outcome
         if sev is not None:

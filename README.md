@@ -41,40 +41,62 @@ Concretely the system:
 
 ## TL;DR of current state
 
-Held-out test split, `n = 202` NTSB Part-121 events. `C1` is the no-RAG baseline.
+Held-out test split, `n = 202` NTSB Part-121 events. Mean +/- sd over **5 seeds**.
+`*` = paired t-test vs C1 across seeds, p < 0.05. Conditions are a retrieval-STRATEGY
+ablation; retrieval reaches the model as **few-shot exemplars**, not priors.
 
-> **These are the input-augmentation (prior) results.** The design has since moved to
-> **few-shot exemplars** as the retrieval mechanism — see
-> [Augmentation strategies](#augmentation-strategies--how-retrieval-reaches-the-model).
-> The C9/C10 few-shot conditions have **not been trained yet**, so no numbers exist for
-> them. The table below stands as the completed source ablation and the baseline any
-> new condition must beat.
-
-| Condition | Retrieval sources | B micro-F1 | B bal-acc | C macro-F1 | C kappa | D acc | D kappa |
+| head | metric | MAJORITY | C1 no RAG | **C2 semantic** | C3 structural | C4 hybrid | C5 raw RAG |
 |---|---|---|---|---|---|---|---|
-| *baseline (majority)* | — | 0.000 | 0.500 | 0.466 | 0.00 | 0.550 | 0.00 |
-| **C1** | none | 0.325 | 0.571 | 0.475 | 0.05 | 0.505 | 0.01 |
-| **C4** | ASIAS + ASRS + NTSB-LOFO | 0.341 | 0.552 | 0.430 | 0.03 | **0.743** | 0.48 |
-| **C5** | ASIAS only | 0.318 | 0.558 | 0.466 | 0.02 | 0.446 | −0.07 |
-| **C6** | ASRS only | 0.330 | 0.554 | 0.228 | −0.01 | 0.470 | −0.03 |
-| **C7** | NTSB-LOFO only | 0.326 | 0.578 | 0.478 | 0.06 | **0.757** | 0.51 |
-| **C8** | all three, *no* LLM factor priors | 0.366 | 0.595 | 0.448 | 0.03 | **0.752** | 0.50 |
+| **B** preconditions | F1 | 0.790 | 0.707 | **0.790\*** | 0.722 | 0.721 | 0.716 |
+| | bal-acc | 0.500 | 0.506 | **0.596\*** | 0.514 | 0.517 | 0.513 |
+| | kappa | 0.000 | 0.007 | **0.183\*** | 0.023 | 0.025 | 0.020 |
+| **C** unsafe acts | F1 | 0.481 | 0.308 | **0.423\*** | 0.231 | 0.289 | 0.290 |
+| | bal-acc | 0.500 | 0.475 | **0.529\*** | 0.465 | 0.438 | 0.450 |
+| | kappa | 0.000 | −0.011 | **0.018\*** | −0.014 | −0.026 | −0.021 |
+| **D** severity | F1 | 0.355 | 0.550 | **0.901\*** | 0.568 | 0.708\* | 0.708\* |
+| | bal-acc | 0.500 | 0.555 | **0.897\*** | 0.571 | 0.708\* | 0.709\* |
+| | kappa | 0.000 | 0.108 | **0.802\*** | 0.140 | 0.416\* | 0.418\* |
 
-Read that table as three findings:
+**Read balanced accuracy and kappa, not F1.** B's groups are ~72% positive, so a
+constant all-ones predictor scores 0.790 micro-F1 while carrying no information — which
+is exactly the MAJORITY row. C2 reaching the same F1 with bal-acc 0.596 and kappa 0.183
+is the meaningful result.
 
-- **B (Preconditions) and C (Unsafe Acts) are at or near chance in every condition.**
-  kappa ≈ 0.0–0.06 on C. Balanced accuracy 0.55–0.60 on B. Nothing you change about
-  the retrieval moves them.
-- **D (Severity) works, but only via one specific signal.** It is at chance without
-  retrieval (0.505), *below* chance with ASIAS or ASRS retrieval, and jumps to ~0.75
-  the moment in-distribution NTSB neighbours are available (C4/C7/C8).
-- **C8 is the tell.** C8 keeps retrieval but throws away every LLM-mined HFACS factor
-  prior, keeping only the neighbours' *structured severity*. D is unchanged (0.752 vs
-  0.743). **The LLM-mined graph content contributes nothing measurable.** What works
-  is a 5-nearest-neighbour vote on narrative similarity.
+Read the table as four findings:
 
-Full numbers: [results/eval_summary.csv](results/eval_summary.csv),
-[results/mcnemar_by_head.csv](results/mcnemar_by_head.csv). Figures in [figures/](figures/).
+- **Semantic retrieval (C2) improves all three heads significantly.** B and C are above
+  their chance floors for the first time in this project.
+- **C5 is the text-mining ablation.** Strip the LLM-mined HFACS labels from the
+  exemplars and B falls 0.596 -> 0.513 and C 0.529 -> 0.450 (neither significant), while
+  D holds at 0.709. **The mined content carries B and C; structured severity carries D.**
+  This reverses the earlier C8 conclusion that mined content contributed nothing — that
+  was measured on a pipeline where retrieval could not reach the model at all (see
+  [ITERATION_2026-09-06.md](ITERATION_2026-09-06.md)).
+- **Structural retrieval (C3) helps almost nothing**, and is significant on no metric
+  except marginally on D (p = 0.055). It matches on pre-narrative context only.
+- **D's 0.897 is NOT a defensible prediction result — see the warning below.**
+
+### The severity caveat you must not skip
+
+Retrieval finds neighbours by narrative similarity, and NTSB narratives *describe the
+outcome*. Measured directly:
+
+| what predicts severity | bal-acc | kappa |
+|---|---|---|
+| raw narrative (TF-IDF, no retrieval) | 0.923 | 0.858 |
+| narrative with outcome sentences stripped | 0.914 | 0.839 |
+| **retrieval on pre-narrative context only (C3)** | **0.571** | **0.140** |
+| retrieval on narrative (C2) | 0.897 | 0.802 |
+
+C2's severity result is substantially **outcome-text matching**, not prediction from
+pre-narrative knowables. `strip_outcome()` was added to address this and **does not
+work**: it removes only ~0.01 of the signal, because narratives reveal outcomes in far
+more ways than damage and injury sentences. **C3's 0.571 is the number defensible
+against the research question as written.** Fixing this properly needs an LLM pass that
+rewrites narratives as circumstances-only; a regex cannot get there.
+
+Full numbers: `results/conditions_{metrics,summary,stats,mcnemar}.csv`.
+Figures: `figures/cond_{metrics_table,stats_table,performance,kappa}.png`.
 
 ---
 
@@ -94,6 +116,7 @@ data/
   rag_retriever.py       Stage 5   hybrid FAISS + Cypher retrieval -> soft priors
                                    (legacy input-augmentation path)
   compare_extractions.py           per-tier prevalence of two extraction runs
+  standardize.py         Stage 1   shared vocabulary + strip_outcome() for retrieval text
   hfacs_analysis.py      figures: extraction distributions / co-occurrence / coverage
   hfacs_tier_counts.py   figure:  event counts per HFACS tier
 models/
@@ -102,13 +125,15 @@ models/
   lstm/test.py           single-checkpoint test-split metrics
   lstm/val.py            single-checkpoint validation-split metrics
   lstm/ensemble.py       Stage 6   RAG-as-a-model, blended at alpha tuned on val
+  lstm/eval_conditions.py Stage 6  C1..C5 metrics, paired t-tests, figures
   causal_discovery.py    PC algorithm vs the theoretical HFACS DAG
   eval_utils.py          shared plotting for Stage 6
+run_conditions.py        Stage 4   trains C1..C5 across seeds -> results/seeds/
 select_subset.py         curates the per-source subsets (and the disjoint KG slice)
 eval_lstm.py             single-checkpoint eval + figure (see the caveat in §11)
 system_eval.py           end-to-end inspection of a few records — read this first
 visualize.py             DAG schema, data quality, KG figures
-results/                 c1.pt ... c10.pt checkpoints, eval_summary.csv, McNemar tables
+results/                 c1.pt..c5.pt, seeds/, conditions_*.csv
 figures/                 all generated PNGs
 ```
 
@@ -385,6 +410,35 @@ two are different conditions rather than the same one.
 
 Both are min-max normalized to [0,1] and combined 50/50.
 
+### Retrieval text and causal chains
+
+**Retrieval text is outcome-stripped.** `standardize.strip_outcome()` removes sentences
+stating damage or injury, and is applied at every point where text is embedded for
+RETRIEVAL — never in Stage-2 extraction, so `hfacs_results.csv` stays comparable. It
+**does not achieve its goal**: stripped text still predicts severity at balanced
+accuracy 0.914 versus 0.923 raw. See the severity caveat in the TL;DR.
+
+**Exemplars carry the extracted causal chain.** Each exemplar is 33 dims:
+
+```
+[ 5 base features | y_B(3) | y_C(2) | y_D(2) | causal roles(20) | similarity(1) ]
+```
+
+The causal block is a role vector over the 10 mined tiers — for each tier, did it act as
+a *cause* and did it act as an *effect*. It comes from the **LLM-extracted** directed
+links, not the graph's deterministic ones:
+
+- Graph `LEADS_TO` written by `kg_builder.classify_edge` is derived from `DAG_EDGES`
+  given which factors co-occur. It is a pure function of the tier set the exemplar
+  already encodes in `y_B`/`y_C`, so feeding it back adds **exactly zero information** —
+  which is why nothing having read those edges has cost nothing.
+- The LLM's own links are independent evidence and frequently contradict the DAG. The
+  three most common are `unsafe_decision -> unsafe_skill`, `unsafe_perception ->
+  unsafe_decision`, `unsafe_decision -> unsafe_violation`, none of which is a DAG edge.
+
+KG exemplars take them from edges filtered on `l.evidence IS NOT NULL` (976/2042 events);
+train exemplars from `relationships_json` (199/710 records).
+
 ### Augmentation strategies — how retrieval reaches the model
 
 Three ways, per the project spec. They are independent and can be combined.
@@ -423,37 +477,26 @@ the same held-out test split and writes `results/eval_summary.csv`,
 
 ### Conditions
 
-**Input augmentation (priors) — the completed source ablation.** These produced the
-numbers in the TL;DR table.
+A retrieval-STRATEGY ablation (spec 2.2/2.3). Retrieval reaches the model as few-shot
+exemplars in every case; only the strategy changes.
 
-| | retrieval sources | question it answers |
+| | strategy | what it tests |
 |---|---|---|
 | C1 | none | structured baseline |
-| C4 | ASIAS 0.34 + ASRS 0.33 + NTSB-LOFO 0.33 | does retrieval help at all? |
-| C5 | ASIAS only | is out-of-distribution accident data enough? |
-| C6 | ASRS only | is out-of-distribution incident data enough? |
-| C7 | NTSB-LOFO only | is in-distribution retrieval the whole story? |
-| C8 | all three, `--no-factor-priors` | do the *LLM-mined factors* matter, or just the structured severity? |
+| C2 | `faiss` — narrative similarity | Strategy A, semantic |
+| C3 | `cypher` — shared structured context | Strategy B, structural. **The only pre-narrative-clean condition.** |
+| C4 | `hybrid` — 50/50 of both | Strategy C |
+| C5 | `hybrid`, LLM-mined labels zeroed | the text-mining ablation: what survives without mined content |
 
-**Prompt augmentation (few-shot) — the current design. Not yet run; no results exist
-for these conditions.**
+Run them with `python run_conditions.py`, evaluate with
+`python models/lstm/eval_conditions.py`. Each condition trains once per seed
+(default 5) and the headline test is a **paired t-test with seeds as replicates** —
+unseeded repeats of C1 alone varied by ~0.04 kappa on D, larger than the gaps between
+conditions, so a single run cannot separate them. McNemar on seed 0 is kept as a
+per-item view.
 
-| | configuration | question it answers |
-|---|---|---|
-| C9 | `--fewshot-k 5`, no priors | do exemplars work on their own? |
-| C10 | `--fewshot-k 5 --rag-strategy hybrid` | do exemplars add anything on top of priors? |
-
-C9 is the headline condition for the new design: retrieval enters *only* as exemplars.
-C10 exists to test whether the two augmentation paths are redundant — if C10 ≈ C9, the
-priors were contributing nothing the exemplars don't already carry, which would be the
-cleanest justification for dropping them.
-
-One thing to watch on C9. Head D is the only head that currently works, and it works
-because the severity prior hands the model a pre-aggregated statistic (C7/C8 ≈ 0.75
-accuracy). The exemplar rows carry the same information in their `y_D` columns, but the
-model must now *learn* the aggregation from 710 training records rather than being given
-it. If D drops sharply in C9 but holds in C10, that inductive bias is the reason, and it
-is worth reporting rather than tuning away.
+The legacy prior-based conditions (`--rag-strategy`, C4..C8 of the old source ablation)
+still work and produced the historical results, but are not the design going forward.
 
 Metrics per head: F1 (micro for the multi-label B, macro for C/D), accuracy, balanced
 accuracy, Cohen's kappa, support, and a **generalization error** = train-minus-test on
@@ -518,29 +561,17 @@ python data/hfacs_extractor.py --force-binary --model qwen2.5:7b
 python data/kg_builder.py --source both
 python data/kg_builder.py --faiss-only
 
-# Stage 4 - train the conditions
-#   C1 is the baseline every condition is measured against.
-python models/lstm/train.py --input data/ntsb_clean.csv --save-path results/c1.pt
+# Stage 4/6 - train and evaluate the five conditions (5 seeds each, ~25 min)
+python run_conditions.py --epochs 500 --seeds 0 1 2 3 4
+python models/lstm/eval_conditions.py
 
-#   CURRENT DESIGN — prompt augmentation (few-shot exemplars, no priors)
-python models/lstm/train.py --input data/ntsb_clean.csv --fewshot-k 5 \
-       --save-path results/c9.pt
-#   C10 adds priors on top, to test whether the two paths are redundant
-python models/lstm/train.py --input data/ntsb_clean.csv --fewshot-k 5 \
-       --rag-strategy hybrid --save-path results/c10.pt
+#   subset / quick check
+python run_conditions.py --only C1 C2 --seeds 0 --epochs 120
 
-#   LEGACY — the input-augmentation (prior) source ablation behind the TL;DR table.
-#   Kept reproducible; not the design going forward.
-python models/lstm/train.py --input data/ntsb_clean.csv --rag-strategy hybrid \
-       --save-path results/c4.pt
-python models/lstm/train.py --input data/ntsb_clean.csv --rag-strategy hybrid \
-       --asias-weight 0 --asrs-weight 0 --ntsb-weight 1 --save-path results/c7.pt
-python models/lstm/train.py --input data/ntsb_clean.csv --rag-strategy hybrid \
-       --no-factor-priors --save-path results/c8.pt
+#   NOTE: changing RETRIEVAL_MODEL or strip_outcome() means the FAISS indexes must be
+#   rebuilt, or 768-dim queries hit a stale index and retrieval silently degrades:
+python data/kg_builder.py --faiss-only --asias-csv data/asias_subset.csv        --asrs-csv data/asrs_subset.csv --ntsb-csv data/ntsb_kg_subset.csv
 
-# Stage 5/6 - evaluate everything
-python models/lstm/eval.py --input data/ntsb_clean.csv
-python models/lstm/ensemble.py --checkpoint results/c9.pt --fewshot-k 5
 python models/causal_discovery.py --input data/ntsb_clean.csv
 
 # Figures + inspection

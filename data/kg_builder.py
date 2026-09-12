@@ -57,6 +57,7 @@ from hfacs_extractor import (  # noqa: E402
     DEFAULT_MODEL,
 )
 from ntsbdataloader import RETRIEVAL_MODEL  # noqa: E402  (FAISS must match retrieval)
+from standardize import strip_outcome  # noqa: E402  (index the same text retrieval queries)
 
 import json  # noqa: E402  (after the package import block, mirrors extractor style)
 
@@ -622,6 +623,7 @@ def build_faiss(writer: KGWriter, source: str, limit=None, path=None):
 
     logging.info("%s: embedding %d narratives with %s", source, len(texts), RETRIEVAL_MODEL)
     model = SentenceTransformer(RETRIEVAL_MODEL)
+    texts = [strip_outcome(t) for t in texts]   # index must match query text
     emb = model.encode(texts, normalize_embeddings=True, show_progress_bar=True)
     emb = np.asarray(emb, dtype="float32")
 

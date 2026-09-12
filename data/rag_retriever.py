@@ -48,7 +48,7 @@ from ntsbdataloader import (  # noqa: E402  (label spaces — single source of t
     ORG_SUBS, SUP_SUBS, PRECOND_SUBS, PRECOND_GROUP_INDEX,
     UNSAFE_VIOLATION_TIER, N_O, N_A, N_B, N_C, RETRIEVAL_MODEL,
 )
-from standardize import binarize_severity  # noqa: E402  (KG severity -> high/low)
+from standardize import binarize_severity, strip_outcome  # noqa: E402
 
 SEVERITY_N = 2   # binary severity prior (high/low) for the D head
 UNSAFE_N = N_C   # binary unsafe prior [P(error), P(violation)] for the (now binary) C head
@@ -255,7 +255,8 @@ class RAGRetriever:
         # ASIAS / ASRS — on-disk FAISS indexes (different corpora; no self-overlap).
         if self._faiss:
             model = self._ensure_sbert()
-            emb = np.asarray(model.encode([text], normalize_embeddings=True), dtype="float32")
+            emb = np.asarray(model.encode([strip_outcome(text)],
+                                          normalize_embeddings=True), dtype="float32")
             for src, weight in (("ASIAS", self.asias_weight), ("ASRS", self.asrs_weight)):
                 if src not in self._faiss or weight <= 0:
                     continue
@@ -395,11 +396,20 @@ class RAGRetriever:
                 "OPTIONAL MATCH (e)-[:HAS_FACTOR]->(f:HFACSFactorNode) "
                 "OPTIONAL MATCH (e)-[:HAS_ENV_CONTEXT]->(env:EnvironmentalContextNode) "
                 "OPTIONAL MATCH (e)-[:HAS_PERSONNEL_CONTEXT]->(pc:PersonnelContextNode) "
+                # Only EVIDENCE-bearing LEADS_TO: those are the LLM-extracted causal
+                # links. Edges without evidence come from classify_edge's
+                # deterministic DAG mapping and are a pure function of the factor
+                # set, so they would add nothing the exemplar does not already have.
+                "OPTIONAL MATCH (e)-[:HAS_FACTOR]->(a:HFACSFactorNode) "
+                "                 -[l:LEADS_TO]->(b:HFACSFactorNode) "
+                "                 <-[:HAS_FACTOR]-(e) "
+                "WHERE l.evidence IS NOT NULL "
                 "RETURN e.event_id AS eid, e.source AS src, "
                 "       e.severity_class AS sev, "
                 "       collect(DISTINCT f.tier) AS tiers, "
                 "       collect(DISTINCT [env.feature, env.value]) AS env, "
-                "       collect(DISTINCT [pc.feature, pc.value]) AS pers",
+                "       collect(DISTINCT [pc.feature, pc.value]) AS pers, "
+                "       collect(DISTINCT [a.tier, b.tier]) AS causal",
                 database_=self.database)
             out = {}
             for r in recs:
@@ -407,10 +417,13 @@ class RAGRetriever:
                 for pair in (r["env"] or []) + (r["pers"] or []):
                     if isinstance(pair, list) and len(pair) == 2 and pair[0]:
                         ctx[pair[0]] = pair[1]
+                causal = [(e[0], e[1]) for e in (r["causal"] or [])
+                          if isinstance(e, list) and len(e) == 2 and e[0] and e[1]]
                 out[(r["eid"], r["src"])] = {
                     "tiers": [t for t in (r["tiers"] or []) if t],
                     "severity": r["sev"],
                     "context": ctx,
+                    "causal": causal,
                 }
             logging.info("RAG: cached attributes for %d KG events.", len(out))
             return out
@@ -556,7 +569,8 @@ class LOFORetriever:
         self._sev = (pd.to_numeric(source_df["severity_class"], errors="coerce")
                      .fillna(0).astype(int).tolist())          # already binarized 0/1
         self._gidx = {g: i for i, g in enumerate(PRECOND_SUBS)}  # group -> column
-        self._texts = source_df["combined_text"].astype(str).fillna("").tolist()
+        self._texts = [strip_outcome(t) for t in            # retrieval text only:
+                       source_df["combined_text"].astype(str).fillna("").tolist()]
         self._sbert = None
         self._index = None
         self._build_index()
@@ -606,7 +620,8 @@ class LOFORetriever:
         """Top-k (ev_id, similarity) from the train split, self-excluding exclude_id."""
         if self._index is None or not _clean(text):
             return []
-        emb = np.asarray(self._sbert.encode([text], normalize_embeddings=True), dtype="float32")
+        emb = np.asarray(self._sbert.encode([strip_outcome(text)],
+                                            normalize_embeddings=True), dtype="float32")
         sims, idx = self._index.search(emb, min(k + 1, len(self.ids)))
         out = []
         for s, i in zip(sims[0], idx[0]):
@@ -649,7 +664,8 @@ class LOFORetriever:
             if not _clean(text):
                 return _uniform_priors()
             exclude = str(record.get("ev_id", ""))
-            emb = np.asarray(self._sbert.encode([text], normalize_embeddings=True),
+            emb = np.asarray(self._sbert.encode([strip_outcome(text)],
+                                                normalize_embeddings=True),
                              dtype="float32")
             sims, idx = self._index.search(emb, min(self.k + 1, len(self.ids)))
 
