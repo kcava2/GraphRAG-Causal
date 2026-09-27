@@ -138,11 +138,10 @@ def main():
               f"emp={row['employment_bracket']} fuel={row['fuel_bracket']}")
         print(f"  narrative: {narrative[:200].replace(chr(10),' ')}...")
 
-        # 1) HFACS extraction truth (B multi-label; C binary violation-vs-error)
+        # 1) HFACS extraction truth (B: 3 groups, C: 4 unsafe-act tiers, multi-label)
         print("\n  [1] HFACS extraction truth from hfacs_results.csv:")
         print(f"      {'B pre':10}: {_true(row['_pre'], N.PRECOND_SUBS)}")
-        viol_true = 1 if N.UNSAFE_VIOLATION_TIER in row["_uns"] else 0
-        print(f"      {'C unsafe':10}: violation={viol_true}  (tiers: {sorted(row['_uns'])})")
+        print(f"      {'C unsafe':10}: {_true(row['_uns'], N.UNSAFE_SUBS)}")
 
         # 2) Few-shot block
         fb = H.get_ntsb_fewshot_examples(narrative, n=2)
@@ -161,7 +160,7 @@ def main():
                 print(f"          {snip}...")
 
         # 4) RAG precondition prior (slice the appended portion of step_b)
-        s_ctx, s_b, yB, yC, yD = ds[i]
+        s_ctx, s_b, yB, yC, yD, _fs, _fsm = ds[i]
         if is_c4:
             pre_p = s_b[N.STEP_B_BASE:].numpy()
             print("\n  [4] RAG precondition prior (appended to step_b):")
@@ -173,18 +172,25 @@ def main():
         with torch.no_grad():
             lB, lC, lD = model(s_ctx.unsqueeze(0), s_b.unsqueeze(0))
         pB = torch.sigmoid(lB[0]).numpy()
-        pC = torch.softmax(lC[0], 0).numpy()              # [P(error), P(violation)]
+        multi_c = bool(getattr(model, "c_multilabel", False))
+        pC = (torch.sigmoid(lC[0]) if multi_c else torch.softmax(lC[0], 0)).numpy()
         pD = torch.softmax(lD[0], 0).numpy()
         print("\n  [5] LSTM predicted causal chain (probabilities):")
         print("      B Preconditions :", [(v, round(p, 2)) for v, p in _topk(pB, N.PRECOND_SUBS, 3)])
-        print(f"      C Unsafe Acts   : P(violation)={pC[1]:.2f} -> pred={int(pC.argmax())}")
+        if multi_c:
+            print("      C Unsafe Acts   :", [(v, round(p, 2)) for v, p in _topk(pC, N.UNSAFE_SUBS, 4)])
+        else:
+            print(f"      C Unsafe Acts   : P(violation)={pC[1]:.2f} -> pred={int(pC.argmax())}")
         print(f"      D Severity      : class {int(pD.argmax())} (probs {pD.round(2).tolist()})")
 
         # 6) agreement (predicted>0.5 vs true)
         def pset(probs, vocab):
             return {vocab[j] for j in range(len(vocab)) if probs[j] > 0.5}
         jB = _jaccard(pset(pB, N.PRECOND_SUBS), set(row["_pre"]))
-        jC = float(int(pC.argmax()) == viol_true)         # C is a binary hit now
+        if multi_c:
+            jC = _jaccard(pset(pC, N.UNSAFE_SUBS), set(row["_uns"]))
+        else:
+            jC = float(int(pC.argmax()) == int(N.UNSAFE_VIOLATION_TIER in row["_uns"]))
         sev_true = int(float(row["severity_class"]))
         sev_hit = int(int(pD.argmax()) == enc.enc_severity.transform([str(sev_true)])[0]
                       if str(sev_true) in set(enc.enc_severity.classes_) else 0)

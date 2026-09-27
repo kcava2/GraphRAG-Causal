@@ -102,8 +102,10 @@ def _loader(df, encoders, retriever, batch, fewshot_source=None, fewshot_k=0):
 
 
 def infer_probs(model, loader, device):
-    """One pass collecting probabilities + stacked inputs. B is multi-label
-    (sigmoid); C (violation vs error) and D (severity) are single-label (softmax)."""
+    """One pass collecting probabilities + stacked inputs. B and C are multi-label
+    (sigmoid); D (severity) is single-label (softmax). A checkpoint from the
+    binary-C era (c_multilabel False) still gets a softmax over its two classes."""
+    multi_c = bool(getattr(model, "c_multilabel", False))
     model.eval()
     pB, pC, pD = [], [], []
     inputs = []
@@ -113,7 +115,7 @@ def infer_probs(model, loader, device):
             fs, fsm = fs.to(device), fsm.to(device)
             lB, lC, lD = model(s_ctx, s_b, fs, fsm)
             pB.append(torch.sigmoid(lB).cpu().numpy())
-            pC.append(torch.softmax(lC, 1).cpu().numpy())
+            pC.append((torch.sigmoid(lC) if multi_c else torch.softmax(lC, 1)).cpu().numpy())
             pD.append(torch.softmax(lD, 1).cpu().numpy())
             inputs.append(torch.cat([s_ctx, s_b], dim=1).cpu().numpy())
     cat = lambda xs: np.concatenate(xs, 0) if xs else np.empty((0,))
@@ -193,7 +195,9 @@ def chain_completion_rate(tB, tC, tD, pB, pC, pD):
     m = tD != -100
     if m.sum() == 0:
         return 0.0
-    ok = ((tB == pB).all(1) & (np.asarray(tC) == np.asarray(pC)) & (tD == np.asarray(pD)))
+    tC, pC = np.asarray(tC), np.asarray(pC)
+    okC = (tC == pC).all(1) if tC.ndim == 2 else (tC == pC)   # 4-tier or legacy binary
+    ok = ((tB == pB).all(1) & okC & (tD == np.asarray(pD)))
     return float(ok[m].mean())
 
 
@@ -242,7 +246,7 @@ def feature_names(cfg):
     extra_b = sb - STEP_B_BASE                       # RAG priors: precond | unsafe | severity
     if extra_b > 0:
         names += [f"b:precPrior[{PRECOND_SUBS[i]}]" for i in range(N_B)]
-        names += [f"b:unsafePrior[{x}]" for x in ("error", "violation")[:N_C]]
+        names += [f"b:unsafePrior[{x}]" for x in UNSAFE_SUBS[:N_C]]
         names += [f"b:sevPrior[{i}]" for i in range(extra_b - N_B - N_C)]
     return names[:sc + sb]
 
@@ -353,9 +357,17 @@ def main():
         aB, aC, aD, pB, pC, pD = evaluate(model, test_loader, device, thr)
 
         n_C = cfg["n_C"]
+        multi_c = bool(cfg.get("c_multilabel"))
         row = {"condition": cond["name"], "n_test": len(aD)}
         row.update(ml_metrics("B", aB, pB))                 # B multi-label
-        row.update(class_metrics("C", aC, pC, n_C))         # C binary single-label
+        if multi_c:                                         # C: 4 unsafe-act tiers
+            row.update(ml_metrics("C", aC, pC))
+            row["C_balanced_acc"] = row["C_balacc"]
+            row["C_kappa"] = float(np.mean([cohen_kappa_score(aC[:, j], pC[:, j])
+                                            for j in range(aC.shape[1])
+                                            if len(set(aC[:, j])) > 1] or [0.0]))
+        else:                                               # legacy binary checkpoint
+            row.update(class_metrics("C", aC, pC, n_C))
         sev, cm = severity_metrics(aD, pD, n_D)             # D NTSB-only (masked)
         row.update(sev)
         row["chain_completion_rate"] = chain_completion_rate(aB, aC, aD, pB, pC, pD)
@@ -366,7 +378,8 @@ def main():
                             fewshot_source=fs_src, fewshot_k=fs_k)
         taB, taC, taD, tpB, tpC, tpD = evaluate(model, tr_loader, device, thr)
         row["B_generror"] = float(_f1_micro(taB, tpB) - row["B_F1"])
-        row["C_generror"] = float(_f1_macro_sev(taC, tpC, n_C) - row["C_F1"])
+        row["C_generror"] = float((_f1_micro(taC, tpC) if multi_c
+                                   else _f1_macro_sev(taC, tpC, n_C)) - row["C_F1"])
         row["D_generror"] = float(_f1_macro_sev(taD, tpD, n_D) - row["D_F1"])
 
         # per-head correctness for McNemar: B per-LABEL (record×group flattened, many
@@ -374,7 +387,7 @@ def main():
         mDok = np.asarray(aD) != -100
         head_correct[cond["name"]] = {
             "B": (aB == pB).reshape(-1),
-            "C": (np.asarray(aC) == np.asarray(pC)),
+            "C": (np.asarray(aC) == np.asarray(pC)).reshape(-1),
             "D": (np.asarray(aD)[mDok] == np.asarray(pD)[mDok]),
         }
         confusions[cond["name"]] = cm
@@ -386,7 +399,8 @@ def main():
         onehotD = np.eye(n_D)[np.asarray(aD)[mD]] if mD.any() else np.zeros((0, n_D))
         roc_data[cond["name"]] = {
             "B": _roc(aB, prB),
-            "C": _roc(np.asarray(aC), prC[:, 1]) if prC.shape[1] > 1 else None,
+            "C": (_roc(np.asarray(aC), prC) if multi_c
+                  else (_roc(np.asarray(aC), prC[:, 1]) if prC.shape[1] > 1 else None)),
             "D": _roc(onehotD, prD[mD])}
 
         # sensitivity + SHAP for C1 and C4 only

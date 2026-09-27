@@ -43,7 +43,7 @@ from torch.utils.data import DataLoader
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 from data.ntsbdataloader import (  # noqa: E402
     NTSBSequenceDataset, NTSBEncoders, FewShotSource, load_and_join, _split,
-    STEP_B_BASE, N_B, N_C, NTSB_CLEAN)
+    STEP_B_BASE, N_B, N_C, NTSB_CLEAN, exemplar_vote)
 from models.lstm.train import make_model  # noqa: E402
 from models.lstm.eval import ml_metrics, class_metrics  # noqa: E402
 
@@ -66,24 +66,19 @@ def rag_probs(fewshot: np.ndarray, mask: np.ndarray):
     """
     n = fewshot.shape[0]
     pB = np.full((n, N_B), 0.5, dtype="float64")
-    pC = np.full((n, N_C), 1.0 / N_C, dtype="float64")
+    pC = np.full((n, N_C), 0.5, dtype="float64")         # C is multi-label, like B
     pD = np.full((n, 2), 0.5, dtype="float64")
     if fewshot.ndim != 3 or fewshot.shape[1] == 0:
         return pB, pC, pD
 
-    sim = np.clip(fewshot[:, :, -1], 0.0, None)          # FAISS IP can go negative
-    w = sim * mask                                       # [n, k]
-    total = w.sum(axis=1)
-    ok = total > 1e-9
+    # The same vote the model is handed (softmax weights, label blocks averaged
+    # over neighbours whose labels are known) — see ntsbdataloader.exemplar_vote.
+    ok = mask.sum(axis=1) > 0
     if not ok.any():
         return pB, pC, pD
-
-    wn = np.zeros_like(w)
-    wn[ok] = w[ok] / total[ok, None]
-    einsum = lambda sl: np.einsum("nk,nkd->nd", wn, fewshot[:, :, sl])
-    pB[ok] = einsum(_B_SLICE)[ok]
-    pC[ok] = einsum(_C_SLICE)[ok]
-    pD[ok] = einsum(_D_SLICE)[ok]
+    v = exemplar_vote(fewshot, mask)
+    pB[ok], pC[ok] = v["B"][ok], v["C"][ok]
+    pD[ok] = np.stack([1.0 - v["D"][ok], v["D"][ok]], axis=1)
     return pB, pC, pD
 
 
@@ -97,7 +92,8 @@ def collect(model, loader, device):
             fs_d, fsm_d = fs.to(device), fsm.to(device)
             lB, lC, lD = model(s_ctx, s_b, fs_d, fsm_d)
             mB.append(torch.sigmoid(lB).cpu().numpy())
-            mC.append(torch.softmax(lC, 1).cpu().numpy())
+            mC.append((torch.sigmoid(lC) if getattr(model, "c_multilabel", False)
+                       else torch.softmax(lC, 1)).cpu().numpy())
             mD.append(torch.softmax(lD, 1).cpu().numpy())
             fsA.append(fs.numpy())
             fsmA.append(fsm.numpy())
@@ -121,9 +117,10 @@ def blend(model_p, rag_p, alpha):
 
 def _score(head, probs, target, thresholds):
     """Head-appropriate scalar used only for tuning alpha (higher is better)."""
-    if head == "B":
-        pred = (probs >= thresholds).astype(int)
-        return ml_metrics("B", target, pred)["B_F1"]
+    if head == "B" or (head == "C" and np.ndim(target) == 2):
+        t = thresholds if head == "B" else 0.5
+        pred = (probs >= t).astype(int)
+        return ml_metrics(head, target, pred)[f"{head}_F1"]
     valid = target != -100
     if valid.sum() == 0:
         return 0.0
@@ -171,6 +168,8 @@ def main():
     model.load_state_dict(ck["state_dict"])
 
     thr = ck.get("thresholds")
+    if isinstance(thr, dict):                        # {'B': vec, 'C': vec}
+        thr = thr.get("B")
     thr = np.asarray(thr, dtype="float64") if thr is not None else np.full(N_B, 0.5)
 
     df = load_and_join(a.input)

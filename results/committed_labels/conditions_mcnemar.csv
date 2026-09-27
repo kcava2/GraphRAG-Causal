@@ -1,0 +1,13 @@
+condition,head,helps,hurts,net,p_value,significant
+C2,B,160,28,132,0.0,yes
+C2,C,230,57,173,0.0,yes
+C2,D,72,8,64,0.0,yes
+C3,B,46,9,37,0.0,yes
+C3,C,66,40,26,0.01517,yes
+C3,D,10,19,-9,0.13739,no
+C4,B,85,13,72,0.0,yes
+C4,C,230,55,175,0.0,yes
+C4,D,66,13,53,0.0,yes
+C5,B,51,2,49,0.0,yes
+C5,C,184,96,88,0.0,yes
+C5,D,65,9,56,0.0,yes

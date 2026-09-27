@@ -1,0 +1,1014 @@
+ev_id,committed,run0,run1,run2,final,reclass,person,rule,intent_evidence
+20080118X00073,0,0,,,0,unsafe_perception,UAL tug operator,"UAL Maintenance Operating Procedures Manual - NMOP Handling, paragraph 10: 'when towing in close quarters, the person on the tractor will have two assistants... one positioned at each wing tip.'",none
+20080125X00103,0,0,,,0,unsafe_skill,Maintenance personnel,Aircraft Maintenance Manual (AMM) TASK 71-13-00-410-040: Close the fan cowl doors.,none
+20080212X00178,1,0,0,0,0,none,none,none,none
+20080220X00214,0,0,0,0,0,none,none,none,none
+20080304X00260,0,0,,,0,unsafe_skill,Flight Attendant,none,none
+20080228X00243,0,0,0,0,0,none,none,FAR 139.337(a) Wildlife Hazard Management,none
+20081124X34243,0,0,,,0,unsafe_perception,Pilot-in-command of the Embraer E170 (Republic Airlines Flight 3416),Standard operating procedures for maintaining safe taxi clearance and situational awareness during ground movement,none
+20080305X00267,1,0,0,0,0,none,none,SAIB NM-04-37 (advisory),none
+20080312X00305,0,0,,,0,unsafe_skill,Maintenance personnel,Proper installation and functional testing of wheel speed tachometers per Maintenance Manual/AMM,none
+20080413X00464,0,0,0,0,0,none,none,none,none
+20080307X00283,0,0,,,0,unsafe_perception,Captain of SWA411,"SWA Flight Operations Manual Bulletin 24-05: 'If lateral clearance is in question: Stop the aircraft, and request a wing walker...'",none
+20080509X00640,0,0,,,0,unsafe_skill,Maintenance personnel,Boeing Service Bulletin (SB) 757-57-0027 installation requirements regarding clip orientation and spacers,none
+20080331X00404,0,1,1,0,1,none,flight crew,14 CFR Part 121.542 (Sterile Cockpit Rule) and GLA Standard Operating Procedures regarding checklist verification,The flight crew spoke of personal matters and did not follow the sterile cockpit regulations as specified by 14 Code of Federal Regulations Part 21.542.
+20080404X00426,0,0,,,0,unsafe_skill,flight crew,"737 Flight Crew Operations Manual and QRH procedures for inoperative anti-skid (manual speed brake deployment, thrust reverser use, minimal braking)",none
+20080722X01094,0,0,,,0,unsafe_perception,none,none,none
+20081003X63355,0,0,,,0,none,none,none,none
+20081219X16532,0,0,,,0,unsafe_decision,Maintenance personnel,"Prohibition against using chemical cleaning solutions that cause hydrogen embrittlement on high-strength steel components (e.g., 300M landing gear cylinders) prior to painting/repair.",none
+20081003X16303,0,0,,,0,unsafe_perception,none,none,none
+20080723X01111,0,0,,,0,unsafe_perception,none,none,none
+20080703X00974,0,0,,,0,unsafe_decision,Captain,none,none
+20080701X00963,0,0,,,0,none,none,none,none
+20080720X01081,0,0,0,0,0,unsafe_perception,tug driver,none,none
+20080808X01189,0,0,,,0,none,none,none,none
+20081003X17330,0,1,1,1,1,none,First Officer,Standard landing flare procedure / Angle of attack limitations,"""a little non-standard, but it's way more fun."""
+20080915X01465,0,0,,,0,unsafe_perception,none,none,none
+20081007X03940,0,0,0,0,0,unsafe_decision,none,none,none
+20081027X75039,0,0,,,0,unsafe_skill,First Officer,none,none
+20081110X15316,0,0,0,0,0,unsafe_perception,tug driver,none,none
+20081113X92722,0,0,,,0,unsafe_perception,ramp agent (tug driver),none,none
+20081116X33137,0,0,,,0,none,none,none,none
+20081219X65313,0,0,,,0,none,none,none,none
+20081215X93019,1,0,1,0,0,unsafe_skill,Maintenance mechanic and RII inspector,"Air Wisconsin GMM Chapter 21, Section 9 - Work Interruption Procedures; Maintenance Manual MM 32-32-05 (Manual gear extend test procedure); Requirement to use inspection tools (flashlight/mirror) for visual checks.",none
+20081215X14936,0,0,,,0,none,none,none,none
+20081216X41655,0,0,,,0,unsafe_skill,none,none,none
+20081217X83220,0,1,0,0,0,none,Maintenance personnel,AMM Task 32-12-01-220-801 (Config A01) requiring the use of an external hydraulic power unit for rigging and checking the landing gear door.,"The maintenance review revealed that the door was rigged and checked with the use of the aircraft hydraulic pumps instead of the external hydraulic power unit as required by the AMM. The narrative does not indicate this was a mistake or lack of knowledge, but rather a deviation from the specified procedure (using internal pumps vs external), which fits the definition of a violation where the specific method mandated by the manual was bypassed."
+20081221X14648,0,0,,,0,unsafe_skill,Captain,none,none
+20081223X70710,0,0,,,0,unsafe_skill,Ground crew,none,none
+20081228X25156,0,0,0,0,0,unsafe_perception,none,none,none
+20081229X40417,0,0,,,0,none,none,none,none
+20081229X80551,0,0,,,0,unsafe_decision,First Officer,Do not advance throttles until parking brakes are parked.,none
+20090102X60836,0,0,,,0,unsafe_perception,Ground crew,none,none
+20090105X01036,0,0,,,0,none,none,none,none
+20090114X61852,0,0,0,0,0,unsafe_perception,tug operator,ramp safety procedures / Diamond of Safety operating rules,none
+20090115X73226,0,0,,,0,unsafe_perception,none,none,none
+20090127X92950,0,0,,,0,unsafe_decision,flight crew,published standard operating procedures in response to a flap anomaly,none
+20090213X13613,0,0,,,0,unsafe_skill,Flight crew,Sterile cockpit procedures,none
+20090223X03403,0,0,,,0,unsafe_perception,flight crew,none,none
+20090303X74824,0,0,0,0,0,none,none,none,none
+20090401X82602,0,0,,,0,unsafe_skill,Flight attendant,Delta Airlines Onboard Manual: flight attendants should be seated immediately when directed by the captain to take their seats due to moderate or severe turbulence (implying securing restraints).,none
+20090421X81417,1,0,0,0,0,none,none,none,none
+20090422X95319,0,0,0,0,0,unsafe_perception,First Officer,Standard operating procedures for taxiing and maintaining clearance from ground equipment (14 CFR Part 121 / Company SOPs),none
+20090505X04553,0,0,,,0,unsafe_skill,First Officer,Airbus A320 Flight Crew Operating Manual (FCOM) pitch limitations and standard landing procedures regarding thrust lever management during flare/touchdown.,none
+20090507X00926,0,0,,,0,unsafe_skill,Captain,none,none
+20090513X31333,0,0,,,0,unsafe_skill,Captain,Quick Reference Handbook (QRH) instruction: 'Use minimum braking consistent with runway conditions to reduce the possibility of a tire blowout',none
+20090522X80352,0,0,,,0,unsafe_perception,Captain,None (No specific regulation or procedure was knowingly deviated from),none
+20090527X25328,0,0,,,0,unsafe_perception,none,none,none
+20090610X65600,0,0,0,0,0,none,none,none,none
+20090611X13753,0,0,,,0,none,none,none,none
+20090712X94532,1,0,0,0,0,none,none,none,none
+20090714X83900,0,0,0,0,0,none,none,none,none
+20090724X12005,0,0,,,0,none,none,none,none
+20090724X34459,0,0,,,0,none,none,none,none
+20090728X71721,0,0,,,0,unsafe_perception,none,none,none
+20090730X12915,0,0,,,0,none,none,none,none
+20090805X42956,0,0,,,0,unsafe_perception,none,none,none
+20090806X21108,0,0,,,0,unsafe_decision,none,none,none
+20090810X21314,0,0,0,0,0,unsafe_perception,none,none,none
+20090828X61756,1,0,0,0,0,unsafe_perception,none,none,none
+20090909X82446,1,0,0,0,0,none,none,none,none
+20090910X95942,0,0,,,0,none,none,none,none
+20090910X53412,0,0,0,0,0,none,none,none,none
+20090921X73211,0,0,,,0,none,none,none,none
+20090921X05830,0,0,,,0,unsafe_perception,none,none,none
+20091020X14635,0,0,,,0,unsafe_perception,flight attendant,none,none
+20091029X02444,0,0,,,0,none,none,none,none
+20091030X64143,0,0,,,0,unsafe_skill,Captain,TCAS manufacturer's guidance to 'promptly but smoothly' follow a resolution advisory (RA) and not maneuver in the opposite direction; typical RA maneuvers require g-forces of ±.25G.,none
+20091102X82140,0,0,,,0,none,none,none,none
+20091117X55556,0,0,,,0,none,none,none,none
+20091124X94107,0,0,,,0,unsafe_perception,none,none,none
+20091214X41802,0,1,1,1,1,none,Captain,"American Airlines Airplane Operating Manual, Volume 1, page 40.1: 'all Cat III approaches are to be flown by the autopilot and to an autoland.'",The captain stated he disconnected the autopilot at that time [below 300 feet] and began flying the airplane manually... The Captain's decision to deviate from the Category III approach and continue it manually contrary to the company Operating Manual.
+20091223X50505,0,0,,,0,unsafe_skill,fuel truck driver,none,none
+20091228X15816,1,0,0,0,0,unsafe_skill,none,none,none
+20100112X10853,0,1,1,1,1,none,Captain,United Airlines Irregular Procedures Landing Gear - Partial Gear or Gear Up Landing checklist specifying engine shutdown 'at touchdown' for one abnormal main gear,"The FO said ""at touchdown it says."" The Captain acknowledged but said ""get ‘em now, we don't need ‘em."""
+20100114X11754,1,0,0,0,0,unsafe_perception,none,none,none
+20100121X82958,0,0,,,0,unsafe_skill,none,none,none
+20100216X20235,0,0,,,0,unsafe_skill,Captain,ATC clearance to fly a 190-degree heading,none
+20100216X34257,0,0,,,0,unsafe_perception,none,none,none
+20100219X11249,0,0,,,0,none,none,none,none
+20100222X84927,0,0,,,0,none,none,none,none
+20100312X84023,0,0,,,0,none,none,none,none
+20100315X12046,0,0,,,0,none,none,none,none
+20100405X40816,0,0,,,0,none,none,none,none
+20100410X34740,0,1,1,0,1,none,Ground service employee (tug operator),"Company ground equipment general driving rules requiring unoccupied vehicles on the ramp to be placed in park or neutral, with the parking brake set and the engine turned off.","The employee reported he exited the tug 'without setting the parking brake or turning off its electric motor' while leaving it in forward gear to pick up bags, indicating a conscious choice to deviate from the required securement procedure for convenience during a routine task."
+20100423X01145,0,0,,,0,unsafe_perception,none,none,none
+20100423X02633,0,0,,,0,unsafe_skill,flight attendant,none,none
+20100503X82523,0,0,,,0,unsafe_skill,Maintenance mechanic and inspector,Jet Blue Required Inspection Item (RII) procedure requiring visual inspection of latches to verify locked position,none
+20100507X94749,0,0,,,0,unsafe_decision,none,none,none
+20100517X92932,0,0,,,0,unsafe_decision,JFK maintenance technician,United Airlines AMM 56-11-00/601 limitations section (deferral allowed) vs. Boeing AMM (replace if arcing/burning signs),"He referred to the United Airlines AMM... which indicated that the window should be replaced due to the discoloration of the bus bar... However, the limitations section... stated that the item could be deferred for 50 flight-hours. After discussing this with another mechanic, they decided to defer the maintenance write-up"
+20100520X02527,0,0,,,0,none,none,none,none
+20100523X62317,0,0,0,0,0,none,none,none,none
+20100525X31845,0,0,,,0,unsafe_perception,none,none,none
+20100606X02721,1,0,0,0,0,unsafe_perception,A330 Flight Crew,Maintain adequate clearance from other aircraft during taxi operations,none
+20100608X35931,0,0,,,0,none,none,none,none
+20100617X02311,0,0,,,0,none,none,none,none
+20100701X93344,1,0,0,0,0,unsafe_perception,Air Traffic Control,"FAA Order 7110.65, paragraph 2-6-4, 'Weather and Chaff Services'",none
+20100714X63624,0,0,,,0,unsafe_perception,baggage handler,none,none
+20100719X80209,0,0,,,0,none,none,none,none
+20100720X43639,0,0,,,0,none,none,none,none
+20100806X53016,0,0,,,0,none,none,none,none
+20100809X75512,1,0,0,0,0,none,none,none,none
+20100811X20501,0,0,,,0,unsafe_perception,Captain,none,none
+20100827X20401,0,1,1,1,1,none,First Officer,Operator's procedure stating to only use the ECAM emergency cancel pushbutton to suppress spurious master cautions.,The first officer stated that he selected and held down the ECAM emergency cancel pushbutton for several seconds and that this was his typical procedure to preempt the autopilot disconnect audio.
+20100928X12406,0,0,,,0,none,none,none,none
+20100930X00358,0,0,0,0,0,unsafe_decision,Captain,QRH GEAR DISAGREE procedure / Landing gear manual release T-handle usage instructions,The captain stated that the notes in the checklist implied to him that the landing gear could come back up if he stowed the manual extension handle. He said about that time... they decided to leave the landing gear manual release handle in the extended position and proceeded to land.
+20101006X00507,0,0,,,0,none,none,none,none
+20101019X33258,0,0,,,0,unsafe_skill,none,none,none
+20101027X04916,0,0,,,0,none,none,none,none
+20101103X34855,0,0,,,0,unsafe_skill,ground crew worker,none,none
+20101103X44221,1,0,1,0,0,unsafe_perception,none,none,none
+20101108X84714,0,0,,,0,none,none,none,none
+20101116X51712,0,0,0,0,0,none,none,none,none
+20101124X20432,0,1,1,0,1,none,Captain,"SkyWest CRJ Standard Operating Procedures (SOP) and Below-Wing Stations Operating Manual: 'When ramp surface conditions would prevent adequate traction for ground equipment, engine start will be delayed until pushback is complete...'","The captain stated that he made a judgment call based on a concern that if he started one engine only, he would encounter control problems taxing in the slippery conditions. He reported that he could also have attempted to start the second engine in the alleyway after pushback using a cross-bleed start. However, he was concerned that attempting such a start would require increasing the power to the running engine and could be disruptive to ground personnel and other traffic within the alleyway."
+20101130X64248,0,0,,,0,unsafe_decision,none,none,none
+20101203X60119,0,0,,,0,none,none,none,none
+20101203X90900,0,0,,,0,none,none,none,none
+20101208X40921,1,0,0,0,0,unsafe_perception,Atlas Air First Officer,14 CFR Part 91.113(b) - See and avoid other aircraft / Maintain adequate clearance during taxi,none
+20101220X14621,0,0,,,0,unsafe_perception,tug operator,none,none
+20110207X84026,0,0,,,0,unsafe_decision,Pilot-in-command,none,none
+20110209X55126,0,0,,,0,none,none,none,none
+20110219X32035,0,0,,,0,none,none,none,none
+20110222X20316,0,0,,,0,unsafe_skill,tractor driver,none,none
+20110228X54428,0,0,,,0,unsafe_perception,none,none,none
+20110317X14552,0,0,,,0,unsafe_decision,flight crew,DHC Q400 Quick Reference Checklist (QRC) ENGINE FAIL/FIRE/SHUTDOWN checklist requirement upon engine oil pressure master warning activation,none
+20110318X05118,0,0,,,0,unsafe_skill,none,none,none
+20110323X24235,0,0,,,0,unsafe_skill,Captain,A300 Airplane Operating Manual (AOM) requirement to be prepared for spoiler-induced pitch-up tendency and respect the 11.2-degree ground contact pitch attitude limit during a go-around.,none
+20110328X80923,0,0,,,0,unsafe_perception,none,none,none
+20110329X33129,0,0,,,0,unsafe_skill,Cabin crew,Proper latching of galley carts prior to landing (standard operating procedure/checklist),none
+20110401X24330,0,0,,,0,unsafe_perception,Flight attendant A,Procedures requiring immediate donning of an oxygen mask when cabin pressure is lost,none
+20110404X21934,0,1,0,0,0,none,Captain,Avionics Smoke ECAM checklist procedure (specifically the requirement to don oxygen masks),The captain stated that he and the FO agreed not to don the masks because there was no smell of smoke.
+20110406X54825,0,0,,,0,unsafe_decision,none,none,none
+20110407X95823,0,0,,,0,none,none,Bombardier's wiring installation specifications (2.0 inch separation),none
+20110412X23201,1,0,0,0,0,unsafe_perception,none,none,none
+20110417X11718,0,0,,,0,none,none,none,none
+20110418X12310,0,0,,,0,none,none,none,none
+20110426X03427,0,0,,,0,unsafe_skill,none,none,none
+20110426X53639,0,0,,,0,unsafe_skill,flight crew,"Southwest Airlines FOM and Normal Checklist requiring the Before Landing checklist to be completed, including arming speedbrakes",none
+20110502X93814,0,0,,,0,unsafe_skill,First Officer,Proper entry of takeoff data (V-speeds) into the Flight Management Computer (FMC),none
+20110510X84704,0,0,,,0,none,none,none,none
+20110510X01046,0,0,,,0,unsafe_perception,none,none,none
+20110513X41407,1,0,0,0,0,unsafe_skill,Captain of B737-700,Adequate wingtip clearance during taxiing (standard operating procedure/limitation),none
+20110517X80339,0,0,,,0,unsafe_decision,Captain,QRH procedure for Landing Gear Unsafe / Go-around requirement upon warning horn activation,"The captain said he was not concerned about the horn and elected not to go-around and run the Quick Reference Handbook (QRH) checklists, since all three landing gear down annunciators were illuminated."
+20110525X42547,0,0,,,0,unsafe_perception,none,none,none
+20110607X73034,0,0,,,0,none,none,none,none
+20110607X83931,0,0,0,0,0,unsafe_skill,none,none,none
+20110615X10113,0,0,,,0,none,none,none,none
+20110621X20741,0,0,,,0,none,none,none,none
+20110621X32040,0,0,,,0,unsafe_perception,Ramp employee responsible for airplane pushback,Procedure to visually verify the position of the jetway before beginning the airplane pushback,none
+20110628X11855,0,0,,,0,none,none,none,none
+20110701X11957,0,0,,,0,unsafe_decision,Ground crew,Proper company tow bar removal procedures for abnormal conditions / Ramp service manual procedure specifying that parking brakes should not be released to assist in releasing a stuck tow bar,none
+20110715X40120,1,0,0,0,0,unsafe_perception,Delta Air Lines Flight 266 Captain,"None identified as knowingly deviated from; standard taxi speed limits and clearance maintenance were involved, but the deviation was due to misperception of distance/visibility rather than a conscious choice to ignore a specific rule.",none
+20110730X60307,0,0,,,0,unsafe_decision,Captain,none,none
+20110808X94427,0,0,,,0,none,none,none,none
+20110830X63935,0,0,,,0,none,none,none,none
+20110902X54326,0,0,,,0,unsafe_skill,Maintenance mechanic,Proper installation procedure for the left main landing gear uplock assembly (specifically attaching the upper attachment bolt to both the uplock mechanism and structure),none
+20110912X61152,0,0,,,0,none,none,none,none
+20110927X91721,0,0,,,0,none,none,none,none
+20110930X20857,0,0,,,0,none,none,none,none
+20111011X01145,0,0,,,0,unsafe_skill,none,none,none
+20111018X03714,0,0,,,0,unsafe_skill,tug driver,none,none
+20111020X14740,0,0,,,0,none,none,none,none
+20111024X74546,0,0,,,0,none,none,none,none
+20111206X05636,0,0,,,0,unsafe_decision,none,none,none
+20111208X41332,0,0,,,0,unsafe_decision,flight attendant,Cabin crew procedure to remain seated or near seat during known turbulence warnings,none
+20111214X53854,1,0,0,0,0,unsafe_perception,Captain of N303DQ,none,none
+20120105X34138,0,0,,,0,unsafe_perception,none,none,none
+20120118X91324,0,0,,,0,unsafe_perception,Ground crew,none,none
+20120207X34555,0,0,,,0,unsafe_perception,belt loader driver,none,none
+20120217X44044,1,0,0,0,0,unsafe_skill,Maintenance personnel,EMB 120 maintenance manual procedure for removal of the left elevator; requirement to install cotter pin safeties on castellated nuts; requirement to document non-routine procedures.,none
+20120221X03231,0,0,,,0,unsafe_skill,Maintenance personnel,none,none
+20120221X32033,0,0,,,0,unsafe_skill,flight attendant,Requirement to be seated with seatbelt fastened during turbulence or when instructed by flight crew,none
+20120224X25922,0,0,,,0,none,none,none,none
+20120224X42146,0,0,,,0,none,none,none,none
+20120229X70237,0,0,,,0,none,none,none,none
+20120302X00956,0,0,,,0,unsafe_skill,flight attendant,none,none
+20120302X22622,1,0,0,0,0,none,none,none,none
+20120312X00949,0,0,,,0,none,none,none,none
+20120312X10202,0,0,0,0,0,none,none,none,none
+20120322X25316,0,0,,,0,none,none,none,none
+20120409X05702,0,0,,,0,unsafe_skill,First Officer,Alternate Landing Gear Extension checklist requiring sufficient force/distance to release uplocks (implied by procedure success criteria and post-accident guidance),none
+20120410X01241,0,0,,,0,none,none,none,none
+20120417X44353,0,0,,,0,none,none,none,none
+20120511X73555,1,0,0,0,0,unsafe_perception,none,none,none
+20120530X64155,1,0,0,0,0,unsafe_perception,747 Captain,none,none
+20120531X95046,0,0,0,0,0,none,none,none,none
+20120608X43116,0,0,,,0,none,none,none,none
+20120612X01249,0,0,0,0,0,none,none,none,none
+20120613X32202,0,0,,,0,unsafe_perception,Pilot,"Company guidance regarding weather radar tilt settings (0 degrees or slightly down for operations between 10,000 and 35,000 feet)",none
+20120719X94744,0,0,,,0,none,none,none,none
+20120727X13551,0,0,,,0,none,none,none,none
+20120802X03552,0,0,,,0,none,none,none,none
+20120807X32623,1,0,0,0,0,none,none,none,none
+20120924X32520,0,0,,,0,unsafe_perception,flight attendant,none,none
+20121005X05550,0,0,,,0,unsafe_skill,catering truck driver,none,none
+20121018X62210,0,0,,,0,unsafe_perception,flight attendant,none,none
+20121231X42414,0,0,,,0,unsafe_perception,flight attendant,none,none
+20130103X44411,0,0,,,0,unsafe_perception,none,none,none
+20130128X11324,0,0,,,0,unsafe_skill,Captain and First Officer,Takeoff performance data briefing procedure / Standard operating procedures for verifying weight and balance entries,none
+20130220X85257,0,0,,,0,unsafe_perception,flight attendant,none,none
+20130220X32821,1,0,0,0,0,unsafe_decision,none,none,none
+20130220X51849,0,0,,,0,unsafe_perception,none,none,none
+20130312X23544,0,0,,,0,none,none,none,none
+20130314X14422,0,0,,,0,unsafe_skill,Captain,Delta 757/767 Flight Crew Training Manual pitch attitude limitation (10.5 degrees),none
+20130314X15433,0,0,,,0,none,none,none,none
+20130408X10949,0,0,,,0,unsafe_skill,Captain,none,none
+20130429X12734,0,0,,,0,unsafe_skill,loadmaster,National Airlines' procedures for restraining special cargo loads,none
+20130502X52359,1,0,0,0,0,unsafe_perception,Flight 908 Captain,"SAS Operations Manual guidance stating that when in doubt, the crew should request assistance from ATC; general duty to ensure safe clearance during taxiing past obstructions.",none
+20130511X04905,0,0,,,0,unsafe_perception,pushback tug operator and wing walker,none,none
+20130515X53650,0,0,,,0,unsafe_decision,Flight Attendant,none,none
+20130517X14847,0,0,,,0,unsafe_perception,Flight Attendant,none,none
+20130519X11737,0,0,,,0,unsafe_skill,First Officer,Alternate Landing Gear Extension Checklist (specifically the notes regarding high force and hand pump usage),none
+20130614X14844,0,0,,,0,unsafe_perception,Captain,Maintain adequate clearance from obstacles during taxi operations (standard operating procedure/regulation),none
+20130712X61436,0,0,,,0,unsafe_perception,none,none,none
+20130723X13256,1,1,0,0,0,none,Captain,Southwest Airlines Flight Operations Manual (FOM) stabilized approach criteria and crew resource management/callout procedures,"The captain knew the approach was unstabilized (flaps incorrect at 500 ft, high on glideslope) but chose to continue the landing and take control at 27 ft instead of executing a go-around as required by SOPs."
+20130814X15751,0,0,,,0,unsafe_decision,Flight crew (Captain and First Officer),None,none
+20130901X95021,0,0,0,0,0,none,none,none,none
+20130930X75500,0,0,,,0,none,none,none,none
+20131018X11441,0,0,,,0,unsafe_decision,Flight Crew,"NKS Crew Operating Manual (COM) EPR mode fault, EGT Overlimit, and N2 Overlimit abnormal/emergency procedures",none
+20131023X24855,0,0,,,0,unsafe_skill,First Officer,Standard operating procedures for landing configuration and cockpit discipline (do not reconfigure aircraft while on active runway),none
+20131121X13345,0,0,,,0,none,none,none,none
+20131220X70905,0,0,,,0,unsafe_skill,none,none,none
+20131224X22946,0,0,0,0,0,none,none,none,none
+20140106X40632,0,0,,,0,none,none,none,none
+20140109X32656,0,0,,,0,unsafe_skill,Captain,none,none
+20140110X14059,0,0,,,0,unsafe_perception,C flight attendant,none,none
+20140110X15754,0,0,,,0,none,none,none,none
+20140203X35450,0,0,,,0,unsafe_skill,ground crew,none,Inattention by ground crew personnel which resulted in the airplane being substantially damaged.
+20140211X00047,0,0,,,0,unsafe_perception,Flight crew (Captain and First Officer),"Trans States Airlines EMB145 AOM, Volume 2, section 2-15: 'the crew remains responsible for monitoring icing conditions and for manual activation of the ice protection system if icing conditions are present and the ice detection system is not activating the ice protection system.'",none
+20140212X03156,0,0,,,0,none,none,none,none
+20140314X21725,0,0,,,0,unsafe_skill,Captain and First Officer,US Airways SOPs requiring verification of FMC configuration (runway) before departure and specific response to ECAM 'thrust not set' alerts (TO/GA detent),none
+20140320X53321,0,0,0,0,0,unsafe_perception,flight attendant,none,none
+20140507X51410,0,0,,,0,unsafe_skill,flight attendant,none,none
+20140515X92350,0,0,,,0,unsafe_perception,Captain,"Standard operating procedures for pushback coordination and brake application (specifically, verifying tug status before applying brakes)",none
+20140516X81837,0,0,0,0,0,unsafe_perception,Air Traffic Controller (R16),"FAA Order 7110.65, paragraph 2-6-4, 'Weather and Chaff Services'",none
+20140529X04134,0,0,,,0,none,none,none,none
+20140603X95748,0,0,,,0,none,none,none,none
+20140619X52159,0,0,,,0,unsafe_perception,flight attendant,FAM WARNING: ...do not raise the potlocking lever until the unit has cooled.,none
+20140620X45424,0,0,,,0,unsafe_decision,Captain,Operator's training manual guidance to manage thrust until the beginning of the flare and maintain normal touchdown attitude (4-6 degrees),none
+20140624X40942,0,0,,,0,unsafe_skill,flight attendant,none,none
+20140714X45633,0,0,,,0,unsafe_skill,Maintenance personnel,DAL work specific cards for the installation and routing of the IDG power feeder cables (requiring no slack/straight routing),none
+20140806X21104,0,0,,,0,unsafe_skill,First Officer,Flight Operations Technical Bulletins instructing pilots to immediately lower the nose after touchdown and warnings against bleeding airspeed below VREF prior to touchdown,none
+20140814X52213,1,0,0,0,0,unsafe_skill,tug driver,none,none
+20140814X52852,0,0,,,0,unsafe_perception,Delta Airlines tug driver,none,none
+20140815X53015,0,0,,,0,none,none,none,none
+20140826X64917,0,0,0,0,0,none,none,none,none
+20140828X43935,0,0,,,0,unsafe_skill,flight attendant,none,none
+20140829X32709,0,0,0,0,0,unsafe_skill,flight attendant,none,none
+20140918X21722,0,0,,,0,unsafe_skill,First Officer,none,none
+20140918X52311,0,0,0,0,0,none,none,none,none
+20141001X94301,0,0,0,0,0,unsafe_perception,Ground crew (tractor driver),None,none
+20141006X73012,0,0,,,0,unsafe_perception,RJA 261 Captain,Maintain adequate clearance from other aircraft during taxi (standard operating procedure/regulation),none
+20141011X20926,0,0,,,0,unsafe_decision,none,none,none
+20141017X44013,1,0,0,0,0,unsafe_decision,none,none,none
+20141023X80357,1,0,0,0,0,unsafe_perception,none,none,none
+20141121X15631,1,0,0,0,0,unsafe_skill,N263WN Captain,none,none
+20141211X62917,0,0,,,0,unsafe_skill,flight attendant,company policy/procedure to be seated immediately upon captain's instruction and PA announcement for severe turbulence,none
+20141217X43728,0,0,,,0,none,none,none,none
+20150116X52840,0,0,,,0,unsafe_skill,Flight Attendant,none,none
+20150211X14605,0,0,,,0,unsafe_skill,maintenance personnel,Installation procedures requiring maintenance personnel to rig the steering feedback sensors and record the rigging values in the Central Maintenance Computer,none
+20150219X14806,0,0,,,0,unsafe_perception,none,none,none
+20150224X45723,0,0,0,0,0,unsafe_perception,none,none,none
+20150305X42958,0,0,,,0,unsafe_skill,Captain,none,none
+20150314X74553,1,0,1,0,0,unsafe_decision,Captain,Airplane logbook entry requirements / Maintenance reporting procedures (14 CFR Part 121.379 or company policy requiring accurate and complete defect reporting),The captain stated that he did not write up the “bang” sound but based his logbook entry on his conversation with maintenance control.
+20150422X71127,0,0,0,0,0,none,none,none,none
+20150506X41316,0,0,,,0,unsafe_perception,Flight crew (Captain),none,none
+20150511X92031,0,0,,,0,none,none,none,none
+20150523X13659,0,0,,,0,unsafe_skill,flight attendant,Regulation requiring cabin crew to secure their harness during takeoff and landing,none
+20150605X52542,0,0,,,0,unsafe_perception,none,none,none
+20150608X90730,0,0,,,0,unsafe_decision,flight crew,none,none
+20150611X74851,0,0,,,0,unsafe_perception,none,none,none
+20150701X91130,0,0,,,0,unsafe_skill,Flight attendant,none,none
+20150701X91338,0,0,,,0,unsafe_skill,flight attendant,none,none
+20150717X41748,0,0,,,0,none,none,none,none
+20150805X75232,0,0,,,0,unsafe_perception,none,none,none
+20150811X22104,0,0,,,0,unsafe_decision,none,none,none
+20150812X63537,0,0,,,0,unsafe_decision,Aft flight attendant,"Flight Attendant Manual (FAM) section 5-35.3: During moderate or occasional severe and/or severe turbulence, flight attendants are to stop all services... and secure themselves in nearest available seat.","Both flight attendants continued to secure items because ""there was a little rattling, nothing even close to needing to sit down."" ... The aft flight attendant could have continued securing drink containers after the flight crew reported that the flight was clear of the turbulence and announced that it was safe to do so."
+20150818X14949,0,0,0,0,0,unsafe_decision,Captain,American Airlines Quick Reference Handbook (QRH) windshear guidance recommending CONF 3 flaps and increased approach speed when windshear alerts/advisories are present.,"The captain reported that he did not reference the QRH for this flight since he did not perceive any hazardous convective weather in the area, despite acknowledging receipt of the windshear advisory and alert."
+20150824X02325,0,0,,,0,unsafe_perception,none,none,none
+20151005X22228,0,0,,,0,none,none,none,none
+20151005X35533,0,0,,,0,none,none,none,none
+20151022X65901,0,0,,,0,unsafe_skill,Flight Attendant,none,none
+20151023X50751,0,0,,,0,unsafe_skill,gate agents,none,none
+20151026X81321,0,0,0,0,0,none,none,none,none
+20151029X44249,0,0,0,0,0,unsafe_skill,none,none,none
+20151107X52955,0,0,,,0,unsafe_perception,none,none,none
+20151124X65446,0,0,,,0,unsafe_perception,none,none,none
+20151130X61148,0,0,,,0,none,none,none,none
+20151213X84149,0,0,,,0,unsafe_perception,none,none,none
+20151216X41606,0,0,,,0,unsafe_perception,none,none,none
+20160106X80332,0,0,,,0,none,none,none,none
+20160112X24550,0,0,,,0,unsafe_perception,none,none,none
+20160119X15230,0,0,,,0,none,none,none,none
+20160119X20258,0,0,,,0,none,none,none,none
+20160126X75122,0,0,,,0,unsafe_perception,Ground crew,none,none
+20160129X24835,0,0,,,0,none,none,none,none
+20160216X30252,1,0,0,0,0,none,none,none,none
+20160218X94149,0,0,,,0,unsafe_perception,American Airlines flight crew,none,none
+20160222X93713,0,0,,,0,none,none,none,none
+20160225X92701,0,0,,,0,unsafe_decision,none,none,none
+20160330X72920,0,0,,,0,unsafe_skill,Captain (Pilot Flying),UPS guidance recommends use of the autothrottle until 50 feet above touchdown,none
+20160415X02200,0,0,,,0,unsafe_skill,ramp agent,Southwest Airlines ground operations manual precautions for ramp operations (keeping hands at a safe distance from moving beltloader parts),none
+20160502X75955,1,0,0,0,0,unsafe_perception,tug driver,none,none
+20160516X92239,0,0,,,0,none,none,none,none
+20160609X10842,0,0,0,0,0,none,none,none,none
+20160614X04330,0,0,,,0,none,none,none,none
+20160627X21034,0,0,,,0,unsafe_decision,Flight attendants,United Airlines Galley Guide requiring coffee pots to be placed on pull-out trays and safe-pour lids to be used in the aisle,none
+20160707X02944,0,0,0,0,0,unsafe_skill,Maintenance technician,B757 AMM Task 73-31-01-404-018-P00 (FFT installation procedure) and Parker O-Ring Handbook ORD5700 (lubrication guidance),none
+20160723X91246,0,0,0,0,0,none,none,none,none
+20160803X71952,0,0,,,0,none,none,none,none
+20160805X44633,1,0,0,0,0,unsafe_skill,tug operator,"airline general operating manual specifies that pushback must be conducted in low or first gear, and at a walking speed",none
+20160805X50153,0,0,,,0,none,none,none,none
+20160805X51304,0,0,0,0,0,none,none,none,none
+20160811X81653,0,0,0,0,0,unsafe_skill,ground crew,none,none
+20160812X71506,0,0,,,0,unsafe_perception,none,none,none
+20160822X94859,0,0,,,0,unsafe_perception,none,none,none
+20160827X31134,0,0,,,0,none,none,none,none
+20160908X11147,0,0,,,0,unsafe_perception,none,none,none
+20160927X51937,0,0,,,0,unsafe_skill,Maintenance personnel,Proper installation procedure for frangible towing fuse in nose landing gear mechanism,none
+20161011X51744,0,0,,,0,unsafe_skill,flight attendant,none,none
+20161027X20715,0,0,,,0,unsafe_skill,none,none,none
+20161028X72837,0,1,1,1,1,none,flight attendant,company procedures for emergency evacuation (specifically regarding engine shutdown status before opening exits),"a flight attendant's deviation from company procedures, which resulted in passengers evacuating from the left overwing exit while the left engine was still operating"
+20161028X93712,1,0,0,0,0,unsafe_decision,none,none,none
+20161205X55455,0,0,,,0,none,none,none,none
+20161216X60544,0,0,,,0,unsafe_perception,none,none,none
+20170216X44213,0,0,,,0,none,none,none,none
+20170222X80758,0,0,,,0,none,none,none,none
+20170224X03359,0,0,,,0,unsafe_perception,catering agent,none,none
+20170308X73155,0,0,,,0,none,none,none,none
+20170317X92137,0,0,,,0,unsafe_skill,#2 and #4 Flight Attendants,Company policy/regulation requiring flight attendants to be seated with seatbelts fastened when the seat belt sign is illuminated.,none
+20170331X95128,0,0,0,0,0,none,none,none,none
+20170419X83518,0,0,,,0,unsafe_skill,flight attendant,none,none
+20170426X40247,0,0,,,0,none,none,none,none
+20170508X85232,0,0,,,0,unsafe_perception,#3 flight attendant,Cabin service procedures requiring crew to remain seated during turbulence or when the fasten seatbelt sign is illuminated,none
+20170523X12020,0,0,,,0,unsafe_skill,First Officer,none,none
+20170523X15143,0,0,,,0,unsafe_skill,flight attendant,"14 CFR Part 121 / Company Policy requiring flight attendants to be seated with seatbelts fastened during expected or actual turbulence, especially after specific instruction from the captain.",none
+20170608X90705,0,0,,,0,none,none,none,none
+20170612X10422,0,0,,,0,none,none,none,none
+20170625X04604,0,0,,,0,unsafe_skill,First Officer,None (No specific regulation or procedure was knowingly deviated from; the issue was a skill/performance deficiency during initial training),none
+20170703X71412,0,0,,,0,unsafe_perception,A321 flight crew,none,none
+20170712X12448,0,0,,,0,none,none,none,none
+20170721X61556,0,0,,,0,none,none,none,none
+20170813X71654,0,0,,,0,unsafe_perception,none,none,none
+20170816X35104,0,0,,,0,unsafe_perception,Delta B737 captain,Maintain proper clearance between aircraft during taxiing (14 CFR Part 91.3 / Company SOPs),none
+20170824X42626,0,0,,,0,unsafe_perception,Captain,"SkyWest Airlines FOM Section F 'General Turbulence Procedures' and Chapter 07 'Adverse Weather', which require the PIC to ensure crew/passengers are briefed/prepared when turbulence is expected or unavoidable, and to notify flight attendants.",none
+20170911X34051,0,0,,,0,none,none,none,none
+20170913X72254,0,0,,,0,unsafe_perception,United Airlines flight 447 flight crew,none,none
+20170920X64035,0,0,,,0,unsafe_perception,Ground crew (tug driver),Airline ground movement procedures stating an airplane on the non-movement area always has the right of way,none
+20171002X95003,0,0,,,0,unsafe_skill,Captain of N841NN,Maintain appropriate clearance from stationary or moving traffic on taxiways (standard operating procedure/regulation),none
+20171003X23920,0,0,,,0,unsafe_perception,ramp agent,none,none
+20171005X44145,0,0,0,0,0,unsafe_skill,flight attendant,none,none
+20171108X55532,0,0,0,0,0,unsafe_decision,none,none,none
+20171212X00211,0,0,,,0,unsafe_skill,flight crew,engine start procedure requiring throttle at idle and brake set,none
+20171212X50255,1,0,0,0,0,unsafe_perception,First Officer of N9011P,Maintain appropriate clearance during taxiing past a stationary aircraft,none
+20171219X90251,0,0,,,0,unsafe_skill,Captain,none,none
+20171220X52223,0,0,,,0,none,none,none,none
+20171226X41907,0,0,,,0,none,none,none,none
+20180109X22437,0,0,0,0,0,unsafe_perception,provisioning agent,none,none
+20180213X95634,0,0,,,0,none,none,none,none
+20180228X30813,0,0,,,0,none,none,none,none
+20180417X23642,0,0,,,0,none,none,none,none
+20180419X80338,0,0,,,0,unsafe_perception,flight crew,none,none
+20180420X04304,0,0,0,0,0,unsafe_skill,none,none,none
+20180503X92154,1,0,0,0,0,unsafe_perception,Delta 212 Captain,Adequate separation/clearance procedures during taxiing,none
+20180507X00658,0,0,0,0,0,unsafe_skill,Ground crew (maintenance truck driver),None,none
+20180611X85348,1,0,0,0,0,none,none,none,none
+20180613X62240,0,0,,,0,unsafe_skill,flight attendant,none,none
+20180618X30834,0,0,,,0,unsafe_skill,flight attendant,none,none
+20180725X32722,0,0,,,0,none,none,none,none
+20180727X04921,0,0,,,0,unsafe_skill,First Officer,Appropriate bounced landing recovery procedure / Proper flare technique standards,none
+20180803X35058,0,0,,,0,none,none,none,none
+20180816X41010,0,0,,,0,unsafe_skill,Captain,none,none
+20180905X90334,0,0,,,0,unsafe_skill,First Officer,Landing flare technique / Recovery from bounce procedure,none
+20180907X10419,0,0,,,0,unsafe_perception,Captain,none,none
+20180913X21320,0,0,,,0,none,none,none,none
+20180922X71035,0,0,,,0,none,none,none,none
+20181001X90405,0,0,,,0,none,none,none,none
+20181009X10416,0,0,,,0,unsafe_skill,caterer personnel,none,none
+20181012X03918,0,0,,,0,unsafe_skill,Flight Attendant,none,none
+20181012X11804,0,0,,,0,none,none,none,none
+20181016X60635,0,0,,,0,none,none,none,none
+20181017X61323,0,0,,,0,none,none,none,none
+20181206X81036,0,0,,,0,unsafe_perception,none,none,none
+20181206X02227,0,0,,,0,unsafe_skill,Captain,CRJ200 Engine Start (Cross-Bleed) procedure requiring parking brake set prior to initiating start,none
+20181206X45642,1,0,0,0,0,unsafe_perception,Flight Crew (Captain and First Officer),"SWA B737NG AOM Tailwind Limitation (10 knots) or Go-around requirement if touchdown beyond 1,500 ft with insufficient stopping margin",none
+20181206X51048,0,0,,,0,none,none,none,none
+20181206X53303,0,0,,,0,unsafe_skill,flight attendant,none,none
+20181231X63848,1,0,0,0,0,unsafe_perception,First Officer,none,The FO indicated that he perceived the aural radar altitude countdown was fast and so reached for the throttles to push them forward.
+20190130X94935,1,1,1,1,1,none,Captain,Abnormal checklist procedure / Company policy requiring go-around or troubleshooting upon unsafe gear indication,"The FE stated that he recommended that they recycle the gear, the captain declined. The FO stated that he recommended that they go around to troubleshoot, the captain declined."
+20190205X55712,0,0,,,0,none,none,none,none
+20190208X10711,0,0,,,0,unsafe_skill,tug driver,none,none
+20190214X42337,0,0,,,0,unsafe_perception,none,none,none
+20190223X60222,0,0,,,0,unsafe_skill,First Officer,none,none
+20190301X50148,0,0,0,0,0,none,none,none,none
+20190304X65511,1,0,0,0,0,unsafe_perception,none,none,none
+20190305X42937,0,0,,,0,unsafe_skill,Flight attendant,none,none
+20190306X80709,0,0,,,0,none,none,none,none
+20190311X35306,0,0,,,0,unsafe_perception,Ground crew,Maintain visual separation and avoid the holding aircraft during pushback operations,none
+20190311X61805,1,0,0,0,0,unsafe_perception,B737 Captain,Maintain safe separation from stationary aircraft on taxiways,none
+20190401X22803,0,0,,,0,none,none,none,none
+20190411X53531,0,0,,,0,unsafe_skill,Captain,none,none
+20190412X45210,0,0,,,0,unsafe_skill,none,none,none
+20190504X04947,1,0,0,0,0,unsafe_decision,Captain and First Officer,"Operator's SOP requiring a missed approach if the aircraft is not stabilized by 1,000 ft AGL; Operator's SOP/SAFO guidance for updated landing distance assessments in wet/tailwind conditions.",none
+20190506X84901,0,0,,,0,unsafe_perception,tug driver,none,none
+20190528X32306,0,0,,,0,unsafe_decision,none,none,none
+20190531X35155,0,0,,,0,unsafe_perception,flight attendant,none,none
+20190617X92437,0,0,,,0,unsafe_skill,Copilot,none,none
+20190617X11841,0,0,,,0,unsafe_skill,Ground crew,none,none
+20190619X25315,0,0,,,0,unsafe_skill,First Officer,none,none
+20190726X91707,0,0,,,0,unsafe_perception,tug driver,none,none
+20190805X55405,0,0,,,0,none,none,none,none
+20190808X43724,0,0,,,0,unsafe_decision,Ramp controller,Ramp Tower Procedures Manual limitation for Spot 11-1 (largest airplane allowed is a CRJ),"United Ramp Tower directed UA flight 435, a Boeing 737, to park on Spot 11-1."
+20190808X62316,0,0,,,0,unsafe_skill,flight crew,Standard operating procedures for go-arounds near the ground inform flight crews to avoid an excessive rotation rate to prevent tailstrikes.,none
+20190813X05139,0,0,,,0,unsafe_skill,Captain,none,none
+20190816X35649,0,0,0,0,0,none,none,none,none
+20190830X64106,0,0,,,0,none,none,none,none
+20190830X60449,0,0,,,0,none,none,none,none
+20190916X91526,0,0,,,0,none,none,none,none
+20191018X02019,0,0,1,0,0,unsafe_decision,none,none,none
+20191030X64711,0,0,0,0,0,none,none,none,none
+20191111X02542,0,0,,,0,unsafe_perception,none,none,none
+20191217X93140,0,0,,,0,unsafe_decision,none,none,none
+20191218X82112,0,0,,,0,unsafe_skill,none,none,none
+20191220X85302,0,0,,,0,unsafe_perception,none,none,none
+20191227X84547,0,0,,,0,unsafe_perception,none,none,none
+20200107X35017,0,0,,,0,unsafe_skill,Maintenance personnel,"Company procedure requiring visual inspection, temper etch, and magnetic particle inspection of the bare trunnion pin after stripping and machining (before shot peening/electroplating).",none
+20200109X21704,0,0,,,0,unsafe_skill,deicing truck driver,failure to maintain appropriate clearance from the airplane,none
+20200110X80637,0,0,,,0,none,none,none,none
+20200125X54545,0,0,,,0,unsafe_perception,none,none,none
+20200207X52205,0,0,0,0,0,unsafe_perception,none,none,none
+20200211X10757,0,0,,,0,unsafe_perception,none,none,none
+20200321X14202,0,0,,,0,unsafe_skill,Captain,none,none
+20200521X63755,0,0,,,0,unsafe_skill,Maintenance mechanic at iAero Repair Station,Maintenance instructions requiring the mechanic to note bolt type/location and return each bolt to its original location; requirement to apply sealant to bolt heads.,none
+20200603X55158,1,0,0,0,0,unsafe_perception,tug driver,none,none
+20200619X60815,0,0,,,0,none,none,none,none
+20200714X42039,0,0,,,0,none,none,none,none
+20200826X34514,0,0,0,0,0,none,none,none,none
+20200914X31949,0,0,,,0,none,none,none,none
+20201109102250,0,0,,,0,none,none,none,none
+20201119102304,0,0,,,0,unsafe_skill,Flight Attendant,CRJ 700 Inflight Operations manual instructions for opening the main cabin door (specifically ensuring handrails are in up and locked position),none
+20201229102469,0,0,,,0,unsafe_perception,none,none,none
+20210210102620,0,0,,,0,unsafe_skill,First Officer,Aircraft operating limitations (Vmo/Mmo) and standard descent procedures,none
+20210220102652,0,0,0,0,0,none,none,none,none
+20210316102768,0,0,,,0,none,none,none,none
+20210317102773,0,0,,,0,unsafe_skill,Flight attendant,Normal operating procedures for the CRJ-700 MCD requires the handrails to be up and pinned prior to closing the door,none
+20210330102835,0,0,,,0,none,none,none,none
+20210409102901,0,0,,,0,unsafe_skill,Maintenance personnel,Proper humpseal repair techniques and maintenance standards to prevent moisture ingress,none
+20210524103134,0,0,,,0,unsafe_skill,Pilot of N8686A,"None (No specific regulation, procedure, or clearance was knowingly deviated from; the failure was a lack of sufficient clearance during taxiing)",none
+20210529103164,0,0,,,0,unsafe_skill,Captain,none,none
+20210628103350,0,0,,,0,unsafe_perception,none,none,none
+20210702103407,1,0,0,0,0,unsafe_perception,Flight Crew (Captain and First Officer),Standard Operating Procedures for Engine Failure/Shutdown Checklist and CRM,none
+20210706103420,0,0,,,0,none,none,none,none
+20210726103537,0,0,,,0,unsafe_perception,none,none,none
+20210825103753,0,0,,,0,none,none,none,none
+20210826103756,0,0,,,0,none,none,none,none
+20210827103762,0,0,,,0,unsafe_skill,flight crew,none,none
+20210921103922,0,0,,,0,unsafe_perception,fuel truck driver,none,none
+20210927103969,0,0,,,0,unsafe_skill,flight crew,pushback checklist,none
+20211001104013,0,0,,,0,none,none,none,none
+20211001104015,0,0,,,0,unsafe_perception,Line Check Airman (LCA),None,none
+20211004104029,0,0,,,0,none,none,none,none
+20211005104043,0,0,,,0,unsafe_skill,Captain,none,none
+20211007104064,0,0,,,0,unsafe_perception,SkyWest flight crew,none,none
+20211025104153,0,0,,,0,unsafe_perception,none,none,none
+20211025104161,0,0,,,0,unsafe_perception,Captain,none,none
+20211206104355,0,0,0,0,0,unsafe_skill,none,Manufacturer's service bulletin regarding lubrication of foreflap fitting assembly,none
+20211213104393,0,0,,,0,unsafe_skill,Captain,Proper pitch attitude maintenance during landing / Standard flare technique,none
+20220103104463,0,0,,,0,unsafe_perception,Turkish Airlines captain,none,none
+20220124104551,0,0,,,0,unsafe_perception,JetBlue flight crew,none,none
+20220204104596,0,0,,,0,unsafe_skill,Maintenance technician (TAP Maintenance & Engineering),Boeing CMM Chapter 32-11-12 / Standard plating procedures requiring non-conductive sleeve on anode stylus to prevent contact,none
+20220601105167,0,0,,,0,unsafe_decision,Flight attendant,Company policy/procedure requiring cabin crew to be seated and secured when seatbelt sign is illuminated or during turbulence,none
+20220623105307,0,0,,,0,none,none,none,none
+20220718105497,0,0,0,0,0,unsafe_skill,none,none,none
+20220811105714,0,0,,,0,unsafe_skill,First Officer,None (No specific regulation or procedure was knowingly deviated from),none
+20220816105749,0,0,0,0,0,unsafe_skill,none,none,none
+20220825105801,0,0,,,0,unsafe_perception,none,none,none
+20220901105843,0,0,,,0,none,none,none,none
+20220907105884,0,0,,,0,none,none,none,none
+20220910105895,0,0,,,0,none,none,none,none
+20220915105950,0,0,,,0,unsafe_perception,Southwest Airlines flight crew,none,none
+20221006106077,0,0,,,0,unsafe_decision,Captain,"Air Wisconsin flight crew manual: rudder steering, using either the pilot or co-pilot rudder pedals, should be used to maintain directional control during landing at all speeds.",none
+20221006106083,0,0,,,0,none,none,none,none
+20221114106279,0,0,,,0,unsafe_perception,none,none,none
+20221117106309,0,0,0,0,0,unsafe_decision,Copilot,none,none
+20221121106329,0,0,,,0,none,none,none,none
+20221202106401,0,0,,,0,unsafe_skill,FA A,Crew coordination and communication of captain's instructions regarding cabin securing procedures,none
+20221205106414,0,0,,,0,unsafe_perception,none,none,none
+20221212106439,0,0,,,0,unsafe_perception,none,none,none
+20221219106472,0,0,,,0,unsafe_decision,flight crew,"Hawaiian Airlines A330 Flight Crew Operating Manual: 'the flight crew should plan to fly above or around areas of severe turbulence' and 'should not overfly a storm cell with its top at or above 25,000 ft'",none
+20230101106517,0,0,,,0,unsafe_perception,Ramp agent,"American Eagle Ground Operations Manual Chapter 2, section 2.1: 'NEVER approach an aircraft to position ground equipment next to an aircraft or open cargo bin doors until the engines are shut down and the rotating beacon(s) turned off'",none
+20230104106534,0,0,,,0,unsafe_perception,ITA Airways flight crew,none,none
+20230213106723,0,0,,,0,none,none,none,none
+20230301106804,0,0,,,0,unsafe_perception,ground service agent,none,none
+20230303106815,0,0,,,0,unsafe_perception,none,none,none
+20230217106744,0,0,,,0,none,none,none,none
+20230322106933,0,0,,,0,none,none,none,none
+20230328106964,0,0,,,0,unsafe_skill,First Officer,none,none
+20230411107036,0,0,,,0,unsafe_skill,Pilot,none,none
+20230425107126,0,0,,,0,unsafe_decision,flight crew,none,none
+20230511135369,0,0,,,0,unsafe_skill,Captain,Maintain appropriate airspeed and pitch attitude during landing (stabilized approach criteria/airplane operating limitations),none
+20230602192290,0,0,,,0,unsafe_perception,none,none,none
+20230602192293,0,0,0,0,0,none,none,none,none
+20230628192485,1,0,0,0,0,unsafe_skill,none,Service Bulletin 717-32-002,none
+20230630192493,0,0,,,0,unsafe_skill,Maintenance personnel,Boeing 737 MAX-9 aircraft maintenance manual (AMM) torque specifications for fuel nozzle b-nuts,none
+20230725192698,0,0,,,0,unsafe_perception,none,none,none
+20230731192742,0,0,,,0,unsafe_perception,none,none,none
+20230731192743,0,0,,,0,unsafe_perception,none,none,none
+20230731192744,0,0,,,0,unsafe_skill,First Officer,"Boeing 767 Flight Crew Training Manual: 'Do not attempt to hold the nose wheels off the runway... To avoid possible airplane structural damage, do not make large nose down control column movements before the nose wheels are lowered to the runway.' / United Airlines 757-767 Flight Manual: 'Fly the nose down to the runway.'",none
+20230804192791,0,0,,,0,unsafe_skill,flight crew,none,none
+20230814192860,0,0,0,0,0,none,none,none,none
+20230814192864,0,0,,,0,unsafe_perception,none,none,none
+20230821192903,0,0,,,0,none,none,none,none
+20230823192927,0,0,,,0,unsafe_perception,none,none,none
+20230830192959,0,0,0,0,0,unsafe_perception,none,none,none
+20230911193031,0,0,,,0,unsafe_skill,flight attendant,fasten safety harness during flight operations (standard operating procedure/regulation),none
+20230925193129,0,0,,,0,unsafe_perception,none,none,none
+20231003193179,0,0,0,0,0,none,none,none,none
+20231005193196,0,0,,,0,none,none,none,none
+20231007193204,0,0,,,0,unsafe_decision,flight crew,none,none
+20231019193272,0,0,,,0,none,none,none,none
+20231201193459,1,0,0,0,0,unsafe_perception,none,none,none
+20231222193561,0,0,,,0,none,none,none,none
+20240106193617,0,0,,,0,none,none,none,none
+20240110193637,0,0,,,0,unsafe_skill,Copilot,none,none
+20240119193682,0,0,,,0,unsafe_skill,Maintenance technician and inspector,Maintenance manual procedure for securing the borescope plug locking feature,none
+20240208193765,0,0,,,0,unsafe_perception,none,none,none
+20240211193772,0,0,,,0,unsafe_skill,Maintenance personnel,Proper reconnection of flexible hydraulic hoses and wheel speed transducer wiring per maintenance procedures/service bulletins,none
+20240212193784,0,0,,,0,unsafe_perception,R24C controller,FAA procedures for Pilot Weather Report (PIREPs) solicitation and dissemination,none
+20240308193898,1,0,0,0,0,unsafe_decision,none,none,none
+20240311193920,0,0,,,0,unsafe_perception,none,none,none
+20240319193963,0,0,,,0,unsafe_skill,none,none,none
+20240328194001,0,0,,,0,unsafe_perception,none,none,none
+20240403194028,0,0,,,0,unsafe_perception,none,none,none
+20240403194029,0,0,,,0,unsafe_perception,none,none,none
+20240427194158,0,0,,,0,none,none,none,none
+20240515194260,0,0,,,0,none,none,none,none
+20240718194718,0,0,,,0,unsafe_perception,Flight attendants,Cabin secure protocol requiring notification to flight deck before taxiing,none
+20240729194782,0,0,,,0,unsafe_perception,Delta Air Lines flight 2046 flight crew,none,none
+20240805194848,0,0,,,0,unsafe_perception,none,none,none
+20240809194881,0,0,,,0,unsafe_perception,none,none,none
+20240809194882,0,0,,,0,none,none,none,none
+20240823194995,0,0,0,0,0,none,none,none,none
+20240829195021,0,0,,,0,unsafe_skill,Maintenance personnel,Component Maintenance Manual (CMM) limits for fastener holes and aileron cable tension/rigging procedures,none
+20240902195036,0,0,,,0,unsafe_perception,Delta Air Lines flight crew,none,none
+20240924195189,0,0,,,0,unsafe_skill,First Officer (Pilot Flying),None,none
+20241030195412,0,0,,,0,unsafe_skill,Captain,Airbus guidance to counteract pitch-up effects of ground spoilers and reverse thrust after a bounced landing,none
+20241104195438,0,0,,,0,none,none,none,none
+20241105195439,0,0,,,0,unsafe_perception,flight attendant,none,none
+20241105195444,0,0,,,0,unsafe_skill,Captain,Standard operating procedure for manual braking with inoperative antiskid systems (apply brakes only after wheels are on the ground and spinning up),none
+20241120195519,0,0,,,0,none,none,none,none
+20241121195527,0,0,,,0,none,none,none,none
+20241121195532,0,0,,,0,none,none,none,none
+20241125195541,0,0,,,0,none,none,none,none
+20241211199406,0,0,0,0,0,none,none,none,none
+20250112199530,0,0,0,0,0,none,none,none,none
+20250114199538,0,0,,,0,unsafe_perception,none,none,none
+20250121199575,0,0,,,0,none,none,none,none
+20250130199620,0,0,,,0,unsafe_perception,none,none,none
+20250205199653,0,0,,,0,unsafe_perception,Japan Airlines flight crew,none,none
+20250207199663,0,0,,,0,unsafe_perception,tug driver,"Chicago Department of Aviation ground motor vehicle operating regulations manual: a driver must stop prior to initiating the crossing of the taxiways A, B, and V to determine if the crossing could be accomplished without stopping in the islands between the taxiways.",none
+20250214199703,0,0,,,0,unsafe_perception,none,none,none
+20250310199820,0,0,,,0,unsafe_perception,none,none,none
+20250403199959,0,0,,,0,unsafe_perception,none,none,none
+20250417200028,0,0,,,0,none,none,none,none
+20250422200055,0,0,,,0,unsafe_perception,Flight Attendant B,Southwest Airlines policy requiring flight attendants to remain seated and secure themselves in jumpseats during descent when turbulence is expected or if compliance checks are prevented by weather.,FA “B” stated it was an automatic response to prepare the cabin even though she remembered afterwards being briefed to remain seated.
+20250505200101,0,0,,,0,unsafe_perception,none,none,none
+20250611200304,0,0,,,0,unsafe_skill,Captain,none,none
+20250617200337,0,0,,,0,none,none,none,none
+20250618200351,0,0,0,0,0,none,none,none,none
+20250623200361,0,0,,,0,none,none,none,none
+20250623200362,0,0,,,0,none,none,none,none
+20250623200379,0,0,,,0,unsafe_perception,none,none,none
+20250708200488,0,0,,,0,unsafe_skill,First Officer,Proper pitch attitude maintenance during flare / Standard landing technique,none
+20250723200619,0,0,,,0,unsafe_perception,ramp service agent (left wing walker),Standard procedure requires left and right wing walkers to wait for an all-clear signal from the marshaller before approaching the airplane,none
+20250724200620,0,0,0,0,0,unsafe_perception,none,none,none
+20250724200627,0,0,,,0,unsafe_perception,none,none,none
+20250809200742,0,0,,,0,none,none,none,none
+20250828200898,0,0,,,0,unsafe_skill,none,none,none
+20250829200899,0,0,,,0,none,none,none,none
+20250902200930,0,0,,,0,none,none,none,none
+20250915201001,0,0,,,0,none,none,none,none
+20251003201780,0,0,,,0,unsafe_perception,none,none,none
+20260128202353,0,0,,,0,unsafe_perception,Captain,none,none
+20001212X20225,0,0,,,0,unsafe_skill,Delta maintenance technician,Maintenance procedure requiring installation of correct part number (596) bearing with specific bore diameter,none
+20001212X20388,0,0,,,0,unsafe_skill,flight attendant,14 CFR Part 121 / Company Policy: Flight attendants must be seated and belted when turbulence is expected or seatbelt sign is on.,none
+20001212X20339,0,0,,,0,unsafe_skill,none,none,none
+20001212X20517,0,0,,,0,none,none,none,none
+20001212X20463,0,0,,,0,unsafe_skill,Refueling truck driver,Maintain safe clearance from parked aircraft / Do not operate vehicle while fatigued or asleep (Ground Operations Safety Procedures),none
+20001212X20452,0,0,,,0,unsafe_perception,none,none,none
+20001212X20503,0,0,,,0,unsafe_skill,Pilot,none,none
+20001212X20472,0,0,,,0,unsafe_skill,none,none,none
+20001212X20332,0,0,,,0,none,none,none,none
+20001212X20714,0,0,,,0,unsafe_perception,tug operator,none,none
+20001212X20571,0,0,,,0,unsafe_perception,none,none,none
+20001212X20606,0,1,0,0,0,none,Captain,Stabilized approach criteria / Company policy requiring abort (go-around) if stabilized approach criteria are not met,"The captain stated, 'that's all right,' in response to the GPWS 'whoop, whoop, pull up' alerts and continued the approach despite being unstable."
+20001212X20693,0,0,,,0,unsafe_skill,cabin crewmember,Company policy/regulation requiring cabin crew to be seated and belted during turbulence or when the seat belt sign is illuminated,none
+20001212X20664,0,0,,,0,none,none,none,none
+20001212X20700,0,0,,,0,unsafe_perception,tug driver,none,none
+20001212X20732,0,0,,,0,none,none,none,none
+20001212X20609,0,0,,,0,none,none,none,none
+20001212X20624,0,1,0,1,1,none,Captain,American Eagle Airlines FAA approved aircraft operating manual (AOM): 'Stabilized approaches are essential when landing on contaminated runways... Touchdown at the planned point.' and standard operating procedures for landing on a contaminated runway.,"The narrative states: 'the captain's failure to follow standard operating procedure for landing on a contaminated ruway in that he touched down long, which combined with his delayed braking resulted in a runway overrun.' The term 'failure to follow' in the context of a known SOP (AOM) and the specific technical details provided (touchdown 2,802 ft from approach end vs. desired 1,000 ft; delayed braking) implies a deviation from established procedure rather than an inability to perform it or lack of knowledge. The captain was experienced (74 flights into ILE in past year) and the conditions were known (wet runway)."
+20001212X20564,0,0,,,0,unsafe_skill,flight attendant,none,none
+20001212X20894,0,0,,,0,none,none,none,none
+20001212X20788,0,0,,,0,unsafe_perception,none,none,none
+20001212X20794,0,0,,,0,none,none,none,none
+20001212X20972,0,0,,,0,unsafe_skill,Pilot-in-command,none,none
+20001212X20896,1,0,0,0,0,none,none,Service Bulletin A601R-57-027 (non-mandatory),none
+20001212X21038,0,0,,,0,unsafe_skill,Captain,ATA L-1011 Operations Manual requirement for wind-adjusted Vref (inner bug setting) and minimum airspeed limits during final approach.,none
+20001212X21060,0,0,,,0,unsafe_perception,First Officer,"Procedures for verifying the forward airstair door is closed and locked (including specific verification methods like cam sight gauges or physical checks, distinct from just viewing the inspection window)",none
+20001212X21079,0,0,,,0,none,none,none,none
+20001212X21300,0,0,,,0,none,none,none,none
+20001212X21288,0,0,,,0,unsafe_skill,pilot,none,none
+20001212X21264,0,0,,,0,unsafe_skill,Mechanic,Requirement to refasten cowling doors and ensure secure latching before return to service (implied by RON-check procedure and airworthiness standards),none
+20001212X21540,0,0,,,0,unsafe_perception,Captain,"Standard operating procedures for taxiing and following marshaller signals (specifically, the requirement to stop when signaled by a marshaller)","The captain stated he 'assumed that the marshaller never knew that they had hit anything' after receiving a normal chocks-in signal despite feeling a bump, indicating he consciously ignored the initial stop/turn signals and proceeded based on his own assessment rather than following the explicit instructions to avoid equipment."
+20001212X20729,0,0,,,0,none,none,none,none
+20001212X21365,0,0,,,0,unsafe_decision,Pilot,none,none
+20001212X21701,0,0,,,0,unsafe_skill,none,none,none
+20001212X21726,0,0,,,0,none,none,none,none
+20001212X21656,0,0,,,0,none,none,none,none
+20001212X21686,0,0,0,0,0,unsafe_perception,none,none,none
+20001212X21738,0,0,,,0,unsafe_perception,none,none,none
+20001212X21420,0,0,,,0,unsafe_skill,none,none,none
+20001212X22049,0,0,,,0,unsafe_perception,Maintenance mechanic,Continental DC-10 zonal inspection requirements / Maintenance Manual task for visual inspection of engine components including nozzle locks,none
+20001212X22032,1,0,1,1,1,unsafe_decision,Maintenance mechanic,Airline task card requiring emergency extension system check and maintenance manual requirement for landing gear rigging after installing a different actuator.,"The narrative states the checks were 'not accomplished' with 'N/A' written in the block, but does not provide evidence that the mechanic knew these specific checks were mandatory for this installation and consciously chose to skip them; it is more consistent with an error (lapse or misunderstanding of applicability) than a knowing deviation."
+20001212X22037,0,0,,,0,none,none,none,none
+20001212X22040,0,0,,,0,none,none,none,none
+20001212X22065,0,0,,,0,unsafe_perception,tug operator,none,none
+20001212X21929,0,0,,,0,none,none,none,none
+20001212X22066,0,0,,,0,unsafe_decision,belt-loader operator,none,none
+20001212X22103,0,0,,,0,none,none,none,none
+20001212X22091,0,0,,,0,unsafe_perception,Captain,none,none
+20001212X22163,0,0,,,0,none,none,none,none
+20001212X22101,0,1,0,0,0,none,Captain,FAA approved airplane flight manual supplement: 'Use of power steering is limited to taxi operations only.',"Because of the strong winds, it was necessary to engage the power steering to assist with the left turn, a normal procedure."
+20001212X22245,0,0,,,0,unsafe_perception,Boeing 727 Captain,"Taxi clearance to proceed Bravo - Papa, hold short of Runway 22 (implying safe passage without collision)",none
+20001220X45467,0,0,,,0,unsafe_decision,none,none,none
+20001212X22266,0,0,,,0,none,none,none,none
+20001212X22320,0,1,1,1,1,none,Captain,"ASA Standard Practice, Page 14, paragraph 35: Captain must include 'Weather along route, including forecast of turbulence' in crew briefing.","The company verified the captain possessed the SIGMET and AIRMET reports before departure, yet he briefed the flight attendants that it would be smooth after takeoff and provided no warning about the known moderate turbulence during descent, despite being responsible for effective briefings as team leader."
+20001212X22314,1,0,0,0,0,unsafe_skill,none,none,none
+20010108X00056,0,0,,,0,unsafe_decision,none,none,none
+20010105X00035,0,0,,,0,none,none,none,none
+20010108X00063,0,0,,,0,none,none,none,none
+20010104X00013,0,0,0,0,0,unsafe_skill,Captain,Maintain proper glide slope/landing short of runway threshold (14 CFR Part 121 / Company SOPs),none
+20010117X00316,0,0,,,0,none,none,none,none
+20010110X00085,0,0,,,0,unsafe_perception,none,none,none
+20001226X45475,0,0,,,0,none,none,none,none
+20001212X21909,0,0,,,0,unsafe_perception,Flight Attendant,Cabin crew safety procedures requiring seatbelt sign compliance during turbulence,none
+20020204X00171,0,0,,,0,unsafe_skill,Turkish Airlines flight 6 captain,14 CFR Part 129 / Company SOP: Maintain safe clearance from other aircraft and obstacles during taxi; do not proceed if unable to maintain safe separation.,"The captain stated, 'We told them we were unable to move ahead... We started, then said no, not possible. We stopped but we slipped.' This indicates a failure of control or perception (slip/lapse) rather than a knowing choice to violate the clearance rule despite understanding it was unsafe."
+20001212X20648,0,0,,,0,unsafe_skill,none,none,none
+20010112X00292,0,0,,,0,unsafe_decision,Captain,Company policy/Manufacturer recommendation prohibiting reverse thrust with red beta light; Procedure requiring timely selection of ground idle (beta) for aerodynamic braking.,It's policy not to use reverse when you get the red light. ... I pulled both throttles to idle and got a bad reverser... I just decided to do a high-speed turn off
+20001215X45420,0,0,0,0,0,none,none,none,none
+20001212X21253,1,1,0,0,0,none,First Officer,"Hawaiian Airlines Flight Operations Manual (page 2-1-11) and 14 CFR Part 121.438: First officers with less than 100 hours in type are not permitted to land at designated special airports (Lihue), and must advise the captain of this limitation.","The narrative states the first officer 'was obligated to so inform the captain of his limitation' but failed to do so, allowing himself to fly the approach and landing despite knowing he had only 61 hours in type. The captain also failed to enforce the rule requiring him to land at a special airport when paired with an inexperienced SIC."
+20001212X20847,0,0,,,0,unsafe_perception,none,none,none
+20001212X20553,0,0,,,0,unsafe_perception,none,none,none
+20001212X20713,0,0,,,0,unsafe_skill,Tug driver,Maintain adequate clearance from nearby aircraft/obstacles during pushback operations (standard operating procedure/company policy),none
+20001212X21299,0,0,,,0,unsafe_skill,none,none,none
+20001220X45463,0,0,,,0,none,none,none,none
+20010205X00392,1,0,0,0,0,none,none,none,none
+20010226X00510,0,0,0,0,0,unsafe_perception,tug operator,none,none
+20010223X00504,0,0,,,0,unsafe_skill,Captain,Company procedure requiring cockpit flow setup before initiating the Before Starting Engines checklist; Checklist requirement to verbalize 'Ready to start No 1(2) engine' for each engine.,"The captain initiated the checklist without completing the required cockpit flow, and later started the second engine without the required verbalization while engaging in a non-pertinent conversation. The narrative describes these as procedural deviations due to distraction or habit rather than an explicit conscious decision to bypass safety rules for convenience (e.g., 'I know I should say it but I won't'). The captain's report of checking throttles three times normally, but failing to do so here due to the maintenance test interference, suggests a lapse in routine execution (error) rather than a knowing violation. The failure to verbalize the second start is described as part of the 'diverted attention' and missed items, consistent with an unsafe skill/perception error under stress/distraction."
+20010214X00449,1,0,0,0,0,unsafe_decision,none,none,none
+20010216X00462,0,0,,,0,unsafe_decision,ramp serviceman,MASSPORT regulations prohibiting operation of ground vehicles behind an airplane with operating engines,none
+20010307X00558,0,0,,,0,none,none,none,none
+20010308X00561,0,0,,,0,unsafe_decision,Captain and First Officer,"Company policy/FAA regulations requiring a pre-approach briefing when changing the planned approach or runway, specifically addressing runway length limitations and visual vs. instrument status.",none
+20010329X00669,0,0,,,0,unsafe_perception,none,none,none
+20010322X00633,0,0,0,0,0,none,none,none,none
+20010319X00608,0,0,,,0,unsafe_skill,First Officer,Company procedure for setting stabilizer trim using units (and manufacturer recommendation regarding MAC/units consistency),none
+20020124X00119,0,0,,,0,unsafe_perception,Flight Crew (Captain and First Officer),None,none
+20010402X00689,0,0,,,0,unsafe_perception,Powerback Coordinator,Northwest Airlines Standard Practice Manual: 'The Marshal is responsible for ensuring Wing Walkers are in proper position before giving the all clear signal. Never signal the flight deck crew to move the aircraft until the Wing Walker is in position and ready',none
+20010507X00899,0,0,,,0,unsafe_decision,Pilot-in-Command,"None (No specific regulation, procedure, or company policy mandated descent or rerouting; dispatcher's recommendation is advisory)",none
+20010416X00753,0,0,,,0,unsafe_perception,American Airlines flight 1547 captain,None (No specific regulation or procedure was knowingly deviated from; the action was based on a misjudgment of clearance),none
+20010423X00790,0,0,0,0,0,none,none,none,none
+20010502X00851,1,0,0,0,0,unsafe_skill,none,none,none
+20010501X00841,0,0,,,0,unsafe_decision,Captain,"None (No specific regulation or procedure explicitly cited as deviated from in the narrative; 'poor planning' is a general description, not an identifiable rule breach)",none
+20010503X00872,0,0,,,0,unsafe_decision,flight dispatcher,14 CFR Part 121 dispatching requirements / Company policy regarding provision of current in-flight weather/turbulence information (PIREPs/AIRMETs),none
+20010507X00887,0,0,,,0,unsafe_skill,tug driver,none,none
+20010531X01039,0,0,,,0,none,none,none,none
+20010529X01018,1,0,0,0,0,unsafe_skill,Company maintenance personnel,14 CFR Part 121 Maintenance Records / Airworthiness Directives requiring rejection of cracked components,At this time I realized that I had tagged an unserviceable part serviceable by mistake.
+20010531X01037,0,0,,,0,unsafe_perception,none,none,none
+20010608X01107,0,0,,,0,unsafe_skill,First Officer,none,none
+20010712X01409,0,0,,,0,unsafe_decision,Captain,none,none
+20010713X01428,0,0,0,0,0,unsafe_decision,Flight Crew,"None (No specific regulation or procedure explicitly cited as being knowingly deviated; the narrative describes an operational outcome and conflicting accounts regarding turbulence vs. unannounced descent, but does not establish a knowing deviation from a defined rule like a checklist item or clearance limit in a way that proves intent to violate).",None
+20010717X01445,1,0,0,0,0,unsafe_decision,Pilot,"Minimum Vectoring Altitude (MVA) of 2,500 feet MSL within 30 nm radius from SZL",none
+20010720X01466,0,0,,,0,none,none,none,none
+20010727X01542,0,0,,,0,none,none,none,none
+20010904X01867,0,0,,,0,unsafe_perception,ramp agent,none,none
+20010816X01695,0,0,,,0,unsafe_perception,none,none,none
+20010821X01745,0,0,,,0,unsafe_decision,Captain,Company policy or standard operating procedure requiring flight attendants to be seated and belted during moderate turbulence (or when the seatbelt sign is on for crew safety),none
+20010821X01739,0,0,,,0,unsafe_perception,Local West One (LW1) air traffic controller,"FAA Order 7110.65, Air Traffic Control Handbook, paragraph 3-1-12: 'Local controllers shall visually scan runways to the maximum extent possible.'","In an interview, LW1 said he did not scan runway 18L."
+20010910X01911,0,0,,,0,unsafe_perception,none,none,none
+20010830X01825,0,0,,,0,unsafe_decision,First Officer (Pilot Flying) and Captain (Pilot Monitoring),"America West Airlines B737 Operations Manual: 'If an unsatisfactory approach is likely to result in a long landing, GO AROUND and make a second approach.'",none
+20010911X01915,0,0,,,0,unsafe_perception,none,none,none
+20010316X00598,0,0,0,0,0,unsafe_skill,ground crew,"American Airlines Winterization Bulletin and Fokker 100 maintenance manual section 12-31-00, page 301: 'Do not let de-icing and/or anti-icing fluid/water mixture go into the APU inlet.'",none
+20010405X00701,0,0,,,0,unsafe_decision,none,none,none
+20010612X01155,0,0,,,0,unsafe_skill,Maintenance mechanic,"Proper routing and securing of wire bundles (e.g., ensuring minimum clearance and using support clamps)",none
+20010308X00571,1,0,0,0,0,none,none,Pratt & Whitney Service Bulletin 20914 (not mandatory for PW120A at the time),none
+20020123X00103,0,0,,,0,none,none,none,none
+20020123X00104,0,0,,,0,none,none,none,none
+20020123X00105,0,0,,,0,none,none,none,none
+20020123X00106,0,0,,,0,none,none,none,none
+20011004X02036,0,0,,,0,unsafe_decision,Captain,UAL Maintenance Manual 'No Verbal Communications Dispatching' paragraph B: Starting of any engines must be done at the gate before pushback or after the final pushback 'Brakes set' signal.,none
+20011022X02123,1,0,0,0,0,unsafe_decision,none,none,none
+20011018X02112,0,0,,,0,none,none,none,none
+20011030X02159,0,1,0,1,1,none,Captain,"Mesa Airlines Company Flight Manual / Standard Operating Procedures regarding stabilized approaches and go-around authority (specifically the requirement to execute a go-around if not stabilized or if airspeed decays below limits, and the incorrect briefing that go-arounds were prohibited).","The captain briefed that 'a go-around was not an option' based on her understanding of the special airport restrictions, despite the First Officer knowing this was incorrect. The Captain chose to continue the approach and close throttles at 50 feet (citing company procedure) while the aircraft was unstable and slow, rather than executing a go-around which she believed was prohibited but actually was not restricted by company policy for pre-touchdown phases."
+20020411X00491,0,0,,,0,none,none,none,none
+20011106X02201,0,0,,,0,unsafe_perception,none,none,none
+20011130X02321,0,0,,,0,unsafe_skill,First Officer,None (No specific regulation or procedure was knowingly deviated from; the action was an unsafe skill/perception error during wake turbulence encounter),none
+20011129X02310,0,0,,,0,none,none,none,none
+20011204X02343,0,0,,,0,none,none,none,none
+20020104X00022,0,0,,,0,unsafe_perception,none,none,none
+20020114X00069,0,0,,,0,unsafe_decision,Flight Crew,14 CFR Part 121 / Company Policy: Requirement to perform accurate weight and balance calculations and use correct performance data for each leg of the flight.,none
+20020110X00051,0,0,0,0,0,unsafe_skill,tug operator,none,none
+20020125X00135,0,0,,,0,none,none,none,none
+20020214X00216,0,0,0,0,0,unsafe_perception,none,none,none
+20020306X00309,0,0,,,0,unsafe_skill,Pilot,none,none
+20020306X00308,0,0,,,0,unsafe_perception,none,none,none
+20020301X00292,0,0,,,0,none,none,none,none
+20020319X00362,0,0,,,0,unsafe_skill,De-icing bucket operators,American Airlines Winterization Bulletin and F-100 maintenance manual section 12-31-00: 'Do not let de-icing and/or anti-icing fluid/water mixture go into the APU inlet.',none
+20020311X00325,0,0,,,0,unsafe_skill,deicing truck driver,none,inadvertently turned his steering wheel in the wrong direction
+20020313X00335,0,0,,,0,none,none,none,none
+20020328X00415,0,1,1,1,1,none,MD-82 ground-marshaling attendant,Ground marshaling procedures requiring the display of an emergency stop signal (crisscrossed lighted wands) when a taxiing aircraft is in conflict or insufficient clearance exists.,"During an interview with NTSB IIC, the ground-marshaling attendant for the MD-82 was asked if he attempted to provide the flight crew of the taxiing MD-11, prior to the collision, the signal for an emergency stop (the crisscrossed lighted (red) flashlight wands). His response was 'no.'"
+20020322X00387,1,0,0,0,0,unsafe_decision,none,none,none
+20020408X00474,0,0,,,0,none,none,none,none
+20020402X00443,0,0,,,0,unsafe_perception,none,none,none
+20020412X00510,0,0,,,0,unsafe_decision,none,none,none
+20020419X00545,0,0,,,0,unsafe_decision,flight attendant,Cabin secured early with everyone including flight attendants in their seats with seat belts secured during expected turbulence,none
+20020429X00592,0,0,0,0,0,unsafe_perception,none,none,none
+20020501X00603,0,1,0,1,1,none,Flight crew,ATA General Operations Manual (GOM) requirement to avoid severe/intense thunderstorms by at least 20 miles; Standard operating procedures for timely activation of seat belt signs in anticipation of turbulence.,"The narrative states the flightcrew's 'failure to follow weather avoidance procedures' and notes they were monitoring radar but still flew within 5-9 miles of extreme echoes, deviating from the known 20-mile GOM limit. The delay in turning on the seat belt sign (only 10 seconds prior) despite being aware of the weather deviation request suggests a conscious choice to manage the situation rather than immediate precautionary action, fitting the definition of an unsafe act that is not purely accidental forgetting."
+20020506X00632,0,0,,,0,unsafe_perception,none,none,none
+20020521X00710,1,0,0,0,0,unsafe_decision,none,none,none
+20020520X00704,0,0,,,0,unsafe_perception,tug driver,none,none
+20020612X00859,0,0,,,0,none,none,none,none
+20020612X00871,0,0,0,0,0,none,none,none,none
+20020606X00822,0,0,,,0,none,none,none,none
+20020606X00821,0,0,,,0,none,none,none,none
+20020625X00969,0,0,,,0,unsafe_skill,First Officer,Delta Airline 757/767 Operations Manual: Deviation from an ATC clearance is authorized only for a Resolution Advisory (RA).,none
+20020625X00967,0,0,,,0,unsafe_skill,ground service personnel,Company procedure for Dornier 328: ground personnel close door flush; flight attendant locks it.,none
+20020621X00955,0,0,,,0,unsafe_skill,First Officer,Standard operating procedures for visual approach and landing (specifically regarding flare technique and energy management),none
+20020718X01166,0,0,,,0,none,none,none,none
+20020702X01033,0,0,,,0,unsafe_perception,First Officer (PNF),"Standard operating procedures for takeoff monitoring, specifically the requirement to monitor airspeed against V-speeds and verify instrument indications before calling 'V1 Rotate'.",none
+20020703X01048,0,0,,,0,unsafe_perception,Pilot,Maintain adequate clearance from obstacles/vehicles during taxi (14 CFR Part 91 / Company SOP),none
+20011003X02029,0,0,,,0,unsafe_decision,Flight Crew (First Pilot and Second Pilot),Stable approach criteria / Company policy regarding stabilized approaches,none
+20020717X01153,0,0,0,0,0,unsafe_perception,ramp agent,Mesaba ground handling manual / Pinnacle Airlines training: no part of the ramp aft of the nose gear/front loading door is to be occupied until propellers have stopped rotating.,none
+20010608X01136,1,0,0,0,0,none,none,none,none
+20020604X00806,0,0,,,0,unsafe_decision,none,none,none
+20020731X01263,0,0,0,0,0,none,none,none,none
+20020729X01242,0,0,,,0,unsafe_skill,ground crew,none,none
+20020801X01282,0,0,,,0,unsafe_skill,Captain and First Officer,Company flight procedures for establishing and maintaining a proper glidepath during visual approaches,none
+20020813X01372,0,0,,,0,none,none,Service Bulletin No. DC10-57-105 / Fleet Campaign Directive (organizational compliance),none
+20020814X01387,0,0,,,0,unsafe_skill,Captain,None (No specific regulation or procedure was knowingly deviated from; the event involved an unsafe control input during a standard maneuver),none
+20020913X01603,0,0,,,0,unsafe_skill,Captain,"None (The specific requirement to brief MEL items was not explicitly mandated by the FCOM at the time, though CRM encouraged backup; the primary deviation was in control technique)",none
+20020923X05198,0,1,0,1,1,none,Captain,Northwest Airlines Flight Operations Manual Section 9.2.2 (Stabilized Approach Criteria: aligned with intended runway prior to 500 feet AGL) and Aircraft Operating Manual (Speedbrake management),"The captain stated, 'I had become fixated on landing the AC... I felt I was in a position to land,' despite the First Officer calling for a go-around and the aircraft being misaligned until 50 feet AGL. He also admitted his fuel estimates were based on incorrect previous experience (Boeing 747) rather than current aircraft data, indicating he knowingly proceeded with an unstable approach due to fixation and flawed judgment rather than unawareness of the rules."
+20020919X05176,0,0,,,0,unsafe_perception,none,none,none
+20020923X05202,1,0,0,0,0,unsafe_perception,tow tug driver,none,none
+20020925X05213,0,0,,,0,none,none,none,none
+20020930X05249,0,0,,,0,unsafe_skill,Company mechanic,Wheel installation procedures requiring proper torque and safety wiring of the axle nut/lock-bolts to engage the keyslot.,none
+20021029X05398,0,0,,,0,unsafe_perception,none,none,none
+20021030X05404,0,0,0,0,0,none,none,none,none
+20030423X00550,0,0,,,0,none,none,none,none
+20021118X05480,0,0,,,0,none,none,none,none
+20021112X05460,0,0,,,0,unsafe_perception,none,none,none
+20021125X05520,0,0,,,0,unsafe_skill,Maintenance mechanic at contract facility,Airbus AMM / UAL Job Instruction Cards for NLG shock absorber assembly (specifically aligning anti-rotation lugs with backplate slots and ensuring correct cam orientation),none
+20021204X05561,0,0,,,0,unsafe_skill,cabin crew,Company policy/regulation requiring verification that galley carts are secured/stowed prior to departure,none
+20030109X00039,0,0,,,0,unsafe_decision,Captain,"None (The narrative explicitly states that discussing runway conditions or landing distance was 'not a requirement' per the Operating Manual; while NOTAMs existed, they were not in the crew's possession due to company failure, and no specific regulation mandated a go-around based on the visual cues described as an absolute rule rather than judgment)",none
+20030110X00049,0,0,,,0,unsafe_perception,none,none,none
+20030205X00166,0,0,,,0,none,none,none,none
+20030116X00075,0,0,,,0,none,none,none,none
+20030129X00123,1,0,0,0,0,unsafe_decision,Taxi Mechanic-in-Charge,"NWA General Engineering and Maintenance Manual (GEMM) section 02-05-03 requiring the taxi mechanic-in-charge to be properly trained, qualified and current on the applicable fleet type.","The narrative states: 'He was not certain if he was current.' and 'he had taxied the airplane regularly as part of his normal work duties.' This indicates a lack of awareness regarding his specific authorization status rather than a knowing choice to bypass a rule. He believed he was qualified based on past experience, which constitutes an error in judgment or perception of his own qualification status, not a violation."
+20030122X00086,0,0,,,0,unsafe_perception,Tug driver,ATA General Maintenance Manual: 'The tow tug operator will... d. Undertake or continue a towing/pushing procedure only when visual contact with all necessary guidemen is possible.' and 'c. Note all potential clearance problems: (1) Obstructions to be avoided.',none
+20030128X00117,0,0,,,0,unsafe_skill,Captain,none,none
+20030214X00221,1,0,0,0,0,none,none,none,none
+20030220X00241,1,0,0,0,0,unsafe_decision,none,none,none
+20030304X00276,0,0,,,0,unsafe_decision,Flight Crew,none,none
+20030305X00291,0,0,0,0,0,unsafe_perception,none,none,none
+20030314X00332,0,0,,,0,none,none,none,none
+20030317X00344,0,0,,,0,none,none,none,none
+20030409X00464,0,0,,,0,unsafe_perception,none,none,none
+20030327X00400,0,0,0,0,0,unsafe_skill,Captain,14 CFR Part 121 / Company SOPs regarding takeoff performance limits on contaminated runways (or general duty to maintain control),none
+20030425X00566,0,0,,,0,none,none,none,none
+20030409X00468,0,0,,,0,unsafe_perception,none,none,none
+20030423X00557,0,0,,,0,none,none,none,none
+20030421X00540,0,0,,,0,none,none,none,none
+20030423X00554,1,0,0,0,0,unsafe_perception,none,none,none
+20030501X00608,0,0,,,0,unsafe_decision,Captain,Before Start Checklist / Standard Operating Procedures for engine start,none
+20030514X00654,0,0,,,0,none,none,none,none
+20030509X00638,0,0,,,0,none,none,none,none
+20030505X00618,1,0,0,0,0,unsafe_skill,none,none,none
+20030514X00656,0,0,,,0,unsafe_skill,belt-loader operator,none,"He switched the transmission into neutral, but the belt-loader continued to roll forward... The belt-loader operator further stated that he did not think to use the emergency brake."
+20030612X00865,0,0,,,0,unsafe_perception,none,none,none
+20030605X00800,0,0,,,0,unsafe_perception,Dassault DA-50 pilot-in-command and co-pilot,"FAA Advisory Circular 120-74 (Part 91 Pilot and Flightcrew Procedures During Taxi Operations) regarding visual lookout, crew coordination, and checklist timing during taxi operations.",none
+20030603X00763,0,0,,,0,unsafe_decision,Flight Crew,none,none
+20030530X00743,0,0,,,0,unsafe_skill,Orange County Fire Authority Engineer (CFR vehicle driver),Standard operating procedure for securing emergency vehicles when unattended (parking brake and tire chocks),He also forgot to set the anti-roll tire chocks underneath his vehicle before entering the terminal.
+20030612X00863,0,0,,,0,unsafe_perception,Captain,none,none
+20030606X00808,0,0,,,0,unsafe_perception,none,none,none
+20030729X01210,0,0,,,0,unsafe_perception,ramp agent,maintain safe separation between aircraft and ground vehicles during marshalling,none
+20030609X00820,0,1,1,1,1,none,Maintenance mechanic,Operator's B1900D maintenance inspection procedures document (FDR functional check limits and procedure),"The analysis showed that, during the FDR functional check... This was the only time that both FDR values for the roll control parameter were in the TED range required by the functional check. ... An additional factor was the improper inspection procedure utilized by the operator's maintenance personnel, during which excessive force was applied to the control wheel in order to obtain acceptable flight data recorder readings during the functional check."
+20030624X00945,0,0,,,0,unsafe_decision,Flight Crew (Captain/First Officer),FAA Advisory Circular AC 00-24B thunderstorm avoidance guidelines / Company policy regarding weather deviation planning,none
+20030616X00873,1,0,0,0,0,none,none,none,none
+20030624X00944,0,0,,,0,unsafe_perception,cabin attendants,none,none
+20030715X01106,0,0,,,0,unsafe_skill,wing walker,none,none
+20030702X00998,0,0,,,0,unsafe_perception,Flight crew,Delta 757/767 Operations Manual Engine Start Procedures: 'abort the start if Fuel flow is abnormally high or fluctuating.',none
+20030707X01028,0,0,,,0,unsafe_perception,none,none,none
+20030902X01433,0,0,,,0,none,none,none,none
+20030807X01283,0,0,0,0,0,none,none,none,none
+20030812X01306,0,0,,,0,unsafe_decision,Pilot-in-command,Failure to sufficiently deviate to avoid known weather; Failure to activate seatbelt sign to ensure personnel were seated prior to encountering turbulence,none
+20030813X01324,0,0,,,0,unsafe_perception,Captain,none,none
+20030813X01321,0,0,,,0,unsafe_perception,none,none,none
+20030905X01467,0,0,,,0,unsafe_perception,none,none,none
+20030822X01387,1,0,0,0,0,none,none,none,none
+20030827X01408,0,0,,,0,unsafe_perception,none,none,none
+20030826X01395,0,0,,,0,unsafe_skill,First Officer,Preflight inspection procedures requiring verification that the cabin door is fully locked and secure (specifically ensuring the pressure lock plunger drops into the 'keyhole' as per manufacturer specifications).,none
+20030826X01404,0,0,,,0,unsafe_perception,none,none,none
+20030910X01507,0,0,0,0,0,unsafe_perception,none,none,none
+20031017X01759,0,0,,,0,none,none,none,none
+20030909X01495,0,0,,,0,none,none,none,none
+20030917X01555,1,0,0,0,0,unsafe_skill,Pushback tractor driver,NWA policy requiring formal training and authorization for pushback operations; assignment to baggage room duties only.,none
+20031021X01788,0,0,,,0,unsafe_perception,ground agent,30-foot turn line clearance procedure / adequate visual lookout requirement,none
+20031114X01902,0,0,,,0,none,none,none,none
+20031010X01706,1,0,0,0,0,unsafe_decision,none,none,none
+20031105X01861,0,0,,,0,none,none,none,none
+20031022X01799,0,0,,,0,unsafe_perception,none,none,none
+20031027X01814,0,0,,,0,none,none,none,none
+20031023X01800,0,0,,,0,unsafe_decision,none,none,none
+20031105X01865,0,0,,,0,none,none,none,none
+20031113X01896,0,0,,,0,none,none,none,none
+20031121X01938,0,0,,,0,none,none,none,none
+20031122X01939,0,0,,,0,unsafe_skill,First Officer (Pilot Flying),none,none
+20031201X01968,0,0,,,0,unsafe_perception,flight crew,14 CFR Part 121 / Company SOP regarding obstacle clearance verification during taxiing/parking,none
+20031209X02011,0,0,,,0,unsafe_skill,none,none,none
+20040121X00082,0,0,,,0,unsafe_skill,First Officer,Proper application of crosswind landing techniques (control wheel/rudder inputs) and flare technique to arrest descent rate before touchdown.,none
+20031219X02063,0,0,,,0,unsafe_skill,tug operator,none,none
+20040121X00083,0,0,0,0,0,unsafe_skill,First Officer,None (No specific regulation or procedure was knowingly deviated from; the issue was a failure in skill/perception during manual flight),none
+20040528X00692,1,0,0,0,0,unsafe_perception,none,none,none
+20040205X00163,0,0,,,0,none,none,none,none
+20040226X00241,0,0,,,0,unsafe_perception,Push Tug Operator,"Station Operations Manual: 'The Pushback Operator shall remain alert for signals given by the Wing Walker(s). When Wing Walker(s) is/are used, if visual contact between the Pushback Operator and Wing Walker is lost, stop the pushback.'",none
+20040305X00271,0,0,,,0,unsafe_perception,none,none,none
+20040310X00315,0,0,,,0,unsafe_perception,none,none,none
+20040315X00323,0,0,,,0,unsafe_skill,Captain,In-Flight Alternate Braking System Operational Check procedure (specifically regarding switch positions and ensuring no unintended system states like parking brake engagement or incorrect BSCU logic states),none
+20040319X00351,0,0,,,0,unsafe_decision,Captain,none,none
+20040408X00430,0,0,,,0,unsafe_perception,fuel truck driver,Bradley International Airport Ramp Rules and Regulations: 'All vehicles shall always relinquish right-of-way to any aircraft moving under its own power or under tow' and 'all vehicles will have lights on during the hours between dusk and dawn and during periods of low visibility.',none
+20040421X00488,0,0,,,0,none,none,none,none
+20040419X00477,0,0,,,0,none,none,none,none
+20040510X00578,0,0,,,0,unsafe_skill,Captain,"None (Failure to execute proper recovery technique or go-around is an unsafe act, but not necessarily a deviation from a specific written rule known and consciously ignored in the manner of a violation)",none
+20040601X00708,0,0,,,0,unsafe_perception,none,none,none
+20040603X00726,0,0,,,0,unsafe_skill,flight attendant,Cabin operating standards: 'CSA opens cabin door after FA moves hands clear of door.',none
+20040714X00967,0,0,,,0,unsafe_decision,Captain,"Embraer Operational Bulletin (April 13, 2004) and Alert Service Bulletin (April 6, 2004): 'DO NOT USE' steering handwheel in case of uncommanded swerving.",none
+20040618X00835,0,0,,,0,unsafe_perception,none,none,none
+20040630X00887,0,0,,,0,unsafe_decision,Captain,"Company policy/regulation requiring flight attendants to be seated and belted during turbulence or when seatbelt sign is on; specifically, releasing crew from duty requires a stable environment.",none
+20040714X00969,0,0,,,0,unsafe_perception,Airbus A319 Captain,Taxiing with adequate clearance from other aircraft/obstacles (general safe taxiing standards/procedures),none
+20040715X00985,0,0,0,0,0,none,none,none,none
+20040719X01004,0,0,,,0,unsafe_skill,Mechanic,AMM Task 71-13-00 for proper latching and closing of fan cowl doors after each maintenance action requiring cowl opening,none
+20040730X01113,0,0,,,0,none,none,none,none
+20060111X00048,0,0,0,0,0,none,none,none,none
+20040812X01200,0,0,,,0,unsafe_skill,Captain,Comair Flight Standards Manual: 'the correct response to a corrective RA is... using approximately a 0.25g maneuver',none
+20040825X01286,0,1,1,1,1,none,Captain,Approved fuel crossfeed procedures (specifically regarding tank shutoff valves during crossfeed operations),"the captain intentionally kept the right fuel tank shutoff valve open during fuel crossfeed operations, which was not in accordance with approved fuel crossfeed procedures."
+20040813X01219,0,0,,,0,unsafe_decision,Captain,Company policy or standard operating procedure requiring flight attendants to be seated and belted during expected severe turbulence or when entering convective activity.,none
+20040816X01227,0,0,,,0,none,none,none,none
+20050323X00350,0,0,,,0,unsafe_perception,none,none,none
+20040902X01347,0,0,,,0,unsafe_skill,First Officer,14 CFR Part 121 / Company SOPs regarding safe landing standards and maintaining aircraft control within runway limits,none
+20041104X01757,0,0,,,0,none,none,none,none
+20041209X01953,1,1,0,0,0,none,Captain,"FedEx Crew Flight Manual: 'After reverse thrust is initiated, a full stop landing must be made. Do not attempt a go-around.'","The captain elected to conduct a go-around maneuver... after reverse thrust was selected, contrary to Boeing and FedEx training guidance."
+20040921X01471,0,0,,,0,unsafe_perception,none,none,none
+20040930X01552,0,0,,,0,none,none,none,none
+20041019X01653,0,0,,,0,unsafe_perception,none,none,none
+20041020X01659,0,0,,,0,unsafe_decision,Captain and First Officer,"14 CFR Part 121 / Established nonprecision instrument approach procedures (specifically, prohibition on descending below MDA without required visual cues)","The narrative states the pilots' 'failure to follow established procedures... including their descent below the minimum descent altitude (MDA) before required visual cues were available', but attributes this to 'fatigue likely contributed to their degraded performance' and describes it as a failure rather than a conscious choice to bypass safety limits for convenience or habit."
+20041028X01714,0,0,,,0,unsafe_decision,none,none,none
+20041027X01709,0,0,,,0,unsafe_perception,Ground employee operating pushback vehicle,Push-out/Towing Procedures requiring additional ground agent when headsets are inoperative; maintaining clearance from propeller,none
+20041109X01790,1,0,0,0,0,unsafe_perception,none,none,none
+20041118X01838,0,0,,,0,unsafe_perception,ramp service employee,Ramp safety procedures requiring maintenance of safe clearance from rotating propellers and specific approach paths for chocking (approaching from the rear),none
+20041122X01849,0,0,,,0,unsafe_skill,First Officer,Maintain proper glide slope / Standard operating procedures for stable approach,none
+20050104X00010,0,0,,,0,none,none,none,none
+20050106X00021,0,0,,,0,none,none,Aerospace Material Specification (AMS) 2664F for silver brazing,none
+20050111X00033,0,0,,,0,unsafe_skill,tug driver,none,none
+20050118X00060,1,0,0,0,0,unsafe_skill,tug operator,FAA regulations requiring qualification/certification for operating specific ground equipment (14 CFR Part 121 / Company Policy),none
+20050118X00061,0,0,,,0,unsafe_perception,snowplow driver,none,none
+20050120X00079,0,0,,,0,unsafe_skill,catering truck driver,none,none
+20050207X00140,0,0,,,0,unsafe_skill,Captain,none,none
+20050310X00294,0,0,,,0,unsafe_decision,none,none,none
+20050323X00356,0,0,,,0,unsafe_decision,Captain,Company procedure/Boeing recommendation: 'Avoid rotation during a gust... Do not rotate early or use a higher than normal rotation rate in an attempt to clear the ground and reduce the gust effect because this reduces tail clearance margins.' / 'Limit control wheel input to that required to keep the wings level.',"The narrative states the captain 'continued to rotate' despite the airspeed stagnation (indicating a gust) and used excessive pitch rate (6.0 deg/sec vs recommended 2.5 deg/sec) and high control wheel input (38.4 degrees). The final determination cites 'failure to follow company procedures'. However, HFACS distinguishes between knowing deviation and error. The captain's actions were reactive to the unexpected gust and perceived lack of lift ('did not fly away as he expected'). He was attempting to recover from a performance anomaly rather than knowingly choosing an unsafe technique over a safe one for convenience or habit. The 'failure' is attributed to misjudging the effect of the gust on rotation timing and pitch rate, which aligns with an error in judgment/skill under stress, not a deliberate violation of a known rule."
+20050317X00323,1,0,0,0,0,none,none,none,none
+20050413X00446,0,0,,,0,unsafe_perception,First Officer,none,none
+20050322X00346,0,0,,,0,unsafe_decision,none,none,none
+20050621X00819,0,0,,,0,unsafe_perception,none,none,none
+20050502X00534,1,0,0,0,0,unsafe_perception,none,none,none
+20050518X00630,0,0,0,0,0,none,none,none,none
+20051213X01965,0,0,,,0,unsafe_skill,Captain,None (No specific regulation or procedure explicitly cited as being knowingly deviated from; the act was a lapse/memory failure regarding engine shutdown status),none
+20050607X00723,0,0,,,0,unsafe_perception,pilot,none,none
+20050526X00682,0,0,,,0,none,none,none,none
+20050520X00650,0,0,,,0,none,none,none,none
+20050603X00716,0,0,,,0,unsafe_skill,none,none,none
+20050609X00744,0,0,,,0,unsafe_skill,Fleet Service Agent,none,none
+20050929X01547,0,1,0,0,0,none,Captain,CL-65 Flight Crew Manual and recurrent training material: 'At least one door to the cabin must remain open when using an outside source such as an air conditioning cart.',"The captain briefed the flight attendant twice that she 'must keep one door open' but then explicitly instructed her to 'shut the service door and the main cabin door,' directly contradicting the safety requirement he was aware of."
+20050613X00760,0,0,,,0,unsafe_decision,none,none,none
+20050627X00874,0,0,,,0,unsafe_skill,Pilot Flying (Captain),None,none
+20050616X00793,0,0,,,0,none,none,none,none
+20050617X00804,0,0,,,0,unsafe_decision,none,none,none
+20050616X00796,0,0,,,0,unsafe_decision,none,none,none
+20050620X00811,0,0,,,0,unsafe_perception,none,none,none
+20050623X00849,0,0,,,0,none,none,none,none
+20050628X00880,0,0,,,0,unsafe_perception,Captain,Maintain positive control of the aircraft during taxi operations (14 CFR Part 121 / Company SOPs),none
+20050629X00896,0,0,,,0,unsafe_perception,left wing walker,none,I did not notice the plane would hit the bridge until it was too late.
+20050701X00915,1,0,0,0,0,none,none,none,none
+20051110X01830,0,0,0,0,0,unsafe_perception,Captain,None (No specific rule identified as knowingly deviated from),none
+20051028X01749,0,0,,,0,unsafe_perception,none,none,none
+20050713X01012,0,0,,,0,unsafe_perception,pushback driver,none,none
+20050825X01313,0,0,,,0,unsafe_perception,Boeing 737-824 Captain,Airman's Information Manual 2-3-4b / Advisory Circular 150/5300-13 (Taxiway Centerline to Object Separation),none
+20050817X01269,0,1,1,0,1,none,tug operator,Company policy requiring main landing gear wheels to be placed on the Taxiway AA centerline (or specific stop-blocks) during pushback to ensure adequate clearance.,"The tug operator stated he pushed N472UA back so its main landing gear was placed just aft of the Taxiway AA centerline, deviating from the procedure that required it on the centerline. The narrative explicitly cites 'the tug operator's failure to follow published company procedures' as causal."
+20050921X01501,0,0,0,0,0,unsafe_perception,"Flight crew (Captain, First Officer, Second Officer)",Cockpit Operations Manual Emergency/Abnormal Procedure 'Red Gear Light Remains On (After Gear Extension)' requiring verification of five green gear lights,none
+20050825X01311,0,0,,,0,unsafe_perception,Captain,"None (No specific regulation or procedure explicitly cited as being knowingly deviated; the area was not charted as restricted, and 'good aviation practices' are general standards rather than a specific identifiable rule in this context)",none
+20050901X01366,1,0,0,0,0,unsafe_perception,none,none,none
+20051025X01717,0,0,,,0,unsafe_decision,Captain,Airbus A321 Flight Crew Operating Manual (FCOM) procedure for simultaneous side stick inputs: activate takeover push button before inputting to prevent algebraic addition of signals; or general safe operation procedures regarding pitch control during bounce recovery.,none
+20050927X01540,0,0,,,0,none,none,none,none
+20050927X01539,0,0,,,0,unsafe_perception,Captain,None (Narrative states: 'The Captain reported that the Before Start Checklist did not remind the flight crew to verify that the cargo was properly restrained.'),none
+20051026X01739,0,0,,,0,unsafe_skill,First Officer,FAA Advisory Circular 120-55B and Airplane Operations Manual (AOM) pitch guidance limits for TCAS RA response,none
+20051020X01700,0,0,0,0,0,unsafe_perception,Captain of Flight 1097,Responsibility for maintaining separation and clearance from other aircraft in non-movement areas (company policy/standard operating procedure),none
+20051018X01675,0,0,,,0,unsafe_skill,De-ice vehicle operator (ASIG crew),Aircraft De/Anti-icing OJT Facilitator Guide post-de-icing procedures: 'ensure all trucks are in their designated safety areas' and 'Relay post De/Anti-icing report',none
+20051026X01729,0,0,,,0,none,none,none,none
+20051104X01781,0,0,,,0,unsafe_decision,none,none,none
+20051101X01766,0,0,,,0,unsafe_decision,none,Service Bulletin CF34-NAC-78-024,none
+20051103X01780,0,0,,,0,none,none,none,none
+20060109X00026,0,0,,,0,unsafe_perception,UPS Captain,Maintain clearance from other aircraft / Taxi safely (14 CFR Part 91/121 operational standards),none
+20051210X01960,0,0,,,0,unsafe_decision,Captain,none,none
+20051130X01905,1,0,0,0,0,unsafe_perception,tug driver,none,none
+20051202X01925,1,0,0,0,0,unsafe_skill,Captain,none,none
+20051209X01956,0,0,,,0,unsafe_perception,none,none,none
+20051213X01964,0,0,,,0,unsafe_perception,Pilots,"None (The failure to divert or use thrust reversers timely is attributed to distraction, lack of familiarity, and misunderstanding of the autobrake system, not a knowing deviation from a specific rule)",none
+20060106X00018,0,0,,,0,none,none,none,none
+20060119X00088,0,0,,,0,none,none,none,none
+20051229X02027,0,0,,,0,unsafe_perception,tug driver,none,none
+20051229X02026,0,0,,,0,unsafe_skill,ground baggage handler,"Ground safety procedures requiring maintenance of safe clearance between ground support equipment and aircraft fuselage, and reporting requirements for any contact or damage to the aircraft.",none
+20060131X00140,1,1,1,1,1,none,Julies Aircraft Services mechanic,Airline General Maintenance Manual requirement to contact Maintenance Control for approval and documentation before performing maintenance; Airport LOA restricting engine power to idle on terminal ramp.,"The surviving mechanic stated he continued without instructions because of his past experience, indicating a conscious choice to bypass the required authorization process based on habit/experience rather than ignorance or error."
+20060126X00127,0,0,,,0,unsafe_skill,Deicing truck driver,Standard operating procedures for deicing operations requiring safe clearance distances between equipment and aircraft structures.,none
+20060627X00840,0,0,,,0,unsafe_decision,Captain,None (No specific regulation or procedure mandated immediate diversion upon odor detection without warning lights),none
+20060308X00278,0,0,,,0,unsafe_skill,deice vehicle driver,Ground safety procedures requiring maintenance of safe clearance from aircraft structures during maneuvering,none
+20060323X00337,0,0,,,0,none,none,none,none
+20060330X00368,0,0,,,0,unsafe_decision,Captain,American Airlines DC-9 Operating Manual Stabilized Approach Requirements (go-around required if not stabilized by minimum heights),none
+20060329X00359,0,0,,,0,unsafe_perception,none,none,none
+20060329X00364,0,0,0,0,0,unsafe_skill,none,none,none
+20060504X00511,0,0,,,0,none,none,none,none
+20060425X00486,0,0,,,0,unsafe_perception,none,none,none
+20060508X00522,0,0,,,0,unsafe_perception,none,none,none
+20060510X00542,1,0,0,0,0,unsafe_skill,none,none,none
+20060522X00602,0,0,0,0,0,unsafe_perception,tug driver,none,none
+20060522X00596,0,0,,,0,unsafe_decision,Flight crew (Captain and First Officer),None,none
+20060618X00758,0,0,,,0,unsafe_decision,none,none,none
+20060616X00745,0,0,,,0,unsafe_perception,Maintenance personnel,Adequate inspection procedures to identify potential brake overheating risks or anomalies before returning aircraft to service,none
+20060720X00974,0,0,,,0,unsafe_skill,Ramp employee (tractor driver),Company standard operating procedures regarding driving under fuselage with attached equipment,none
+20060622X00799,0,0,,,0,none,none,none,none
+20060623X00811,0,0,,,0,none,none,none,none
+20060711X00910,0,0,0,0,0,none,none,none,none
+20060721X00983,0,0,,,0,none,none,none,none
+20060803X01079,0,0,,,0,unsafe_skill,tug driver,none,none
+20060808X01115,0,0,,,0,none,none,none,none
+20060808X01112,1,0,0,0,0,unsafe_decision,none,none,none
+20060925X01395,0,0,,,0,unsafe_skill,maintenance technician,"737-300/-400/-500 airplane maintenance manual, page 213 (alerting that applying brakes while towing could shear towbar pins)",none
+20060828X01244,0,0,0,0,0,unsafe_perception,Flight Crew (Captain and First Officer),Standard Operating Procedures requiring cross-checking of position/runway identification before takeoff; Federal regulations regarding cockpit discipline/nonpertinent conversation,none
+20060908X01321,0,0,,,0,unsafe_skill,Pilot flying,QRH instruction: 'after landing use minimum braking consistent with runway' and MEL limitation: 'brake with caution',none
+20060908X01318,0,0,,,0,unsafe_decision,First Officer,"Delta Airway Manual section 3-14: 'When a restrictive note regarding the localizer or glide slope appears on a Jeppesen Chart, autoland is not authorized.' (The chart was noted 'unusable from 0.8 nm to threshold')",none
+20061015X01521,1,0,0,0,0,unsafe_decision,none,none,none
+20061006X01478,0,0,,,0,unsafe_decision,Captain,none,none
+20061017X01529,0,0,,,0,none,none,none,none
+20071128X01867,0,0,,,0,none,none,none,none
+20070426X00458,0,0,,,0,unsafe_perception,Airbus A-320 Pilot-in-Command,14 CFR Part 91.3(b) / Company SOP: Maintain safe separation from other aircraft/obstacles during taxi,none
+20061117X01683,0,0,,,0,unsafe_perception,Captain,14 CFR Part 121 / Company SOP: Maintain positive control of aircraft and stay on designated taxiways; adequate visual lookout required.,none
+20061219X01807,0,0,,,0,none,none,none,none
+20070105X00013,0,0,,,0,unsafe_perception,deicing truck operator,"Ground vehicle safety procedures requiring maintenance of safe clearance distances from aircraft structures (e.g., FAA Advisory Circulars or company SOPs for ground operations)",none
+20070111X00042,0,0,,,0,unsafe_skill,Captain of Southwest Airlines flight 1011,Maintain adequate clearance from other aircraft/obstacles during taxi (standard operating procedure/regulation),none
+20070131X00119,0,0,,,0,none,none,none,none
+20070223X00215,0,0,0,0,0,unsafe_decision,Flight Crew,None,none
+20070228X00237,0,0,,,0,unsafe_skill,Captain,None (Maximum demonstrated crosswind is not a limiting value; Flight Manual states gusts are advisory only),none
+20070309X00265,0,0,,,0,none,none,none,none
+20070313X00281,0,0,,,0,none,none,none,none
+20070423X00446,0,0,,,0,none,none,none,none
+20070323X00325,0,1,0,0,0,none,Captain of flight 406,Company policy/procedure prohibiting partial pushbacks for on-time departure credit and requiring clear area behind aircraft before initiating pushback (as identified in the post-accident corrective actions),The captain advised the tug driver to push the airplane back as much as possible so they would be credited with an on-time departure.
+20070610X00702,1,0,0,0,0,unsafe_perception,LC2 controller,LAS ATCT Standard Operating Procedures (SOP) Paragraph 4-35 regarding Runway Intersection Coordination Device (RICD) usage and FAA Order 7110.65 separation standards.,"The LC2 controller stated that he had observed AAY588 at 'taxi speed' on runway 19L, and decided that he could transfer control of the intersection to LC1."
+20070409X00387,0,0,,,0,unsafe_skill,Flight Crew (Captain and First Officer),Airplane placard stating 'Pull up forcibly Full Stroke' and the requirement to complete the checklist/ensure the holding latch is engaged,Examination of the cockpit revealed the landing gear handle was in the stowed position... The flight crew's failure to complete the checklist and adhere to airplane placards.
+20070501X00494,0,0,,,0,unsafe_decision,Pilots,Pinnacle's Operations Specifications requiring a landing distance assessment for contaminated runways,none
+20070418X00436,0,0,,,0,unsafe_decision,none,none,none
+20070502X00501,0,0,,,0,unsafe_skill,none,none,none
+20070503X00504,0,0,,,0,unsafe_decision,none,none,none
+20070520X00598,0,0,,,0,unsafe_decision,Flight Crew,Operator's cockpit and cabin procedures requiring the flight crew to brief the cabin crew regarding forecast turbulence; Turbulence Action Chart requiring advice of expected level/duration for moderate turbulence.,"The narrative states the briefing was conducted but contained 'no specific recollection... except that there was nothing significant' and 'there were not any enroute weather updates.' This indicates a failure to convey known information (AIRMET) or update, which is typically classified as an error in communication/decision-making rather than a knowing deviation from a rule. The crew did not knowingly choose to ignore the AIRMET; they failed to act on it effectively."
+20070504X00513,0,0,,,0,none,none,none,none
+20070601X00676,1,1,1,1,1,none,senior ground agent,"Company guidance requiring immediate reporting of safety concerns or hazards posing an imminent threat to life or health, and prohibition against using vehicles for purposes other than designed (5-foot rule)",The senior ground agent then advised 'don’t say anything' to one of the other ground agents who was working the flight with him.
+20070614X00724,0,0,,,0,unsafe_perception,none,none,none
+20070712X00920,0,0,0,0,0,unsafe_perception,mechanic,Ground Operations manual: 'all ground personnel involved in moving aircraft are individually responsible for remaining continuously alert for any potential collisions and remaining in view of the aircraft tow tractor driver at all times.',none
+20070625X00787,0,0,0,0,0,unsafe_decision,Captain,none,none
+20070705X00879,0,0,,,0,unsafe_perception,none,none,none
+20070720X00966,0,0,,,0,unsafe_perception,flight attendant,none,none
+20070718X00958,0,0,,,0,unsafe_skill,Ground crew (mechanic),none,none
+20070911X01360,0,0,0,0,0,unsafe_skill,flight attendant,none,none
+20071130X01878,0,0,,,0,none,none,none,none
+20070817X01201,0,0,,,0,none,none,none,none
+20071005X01522,0,0,,,0,unsafe_skill,American Airlines maintenance personnel,Appropriate manual engine start procedure (specifically regarding the Air Turbine Starter Valve),none
+20071029X01680,0,0,,,0,unsafe_perception,none,none,none
+20071023X01634,0,0,0,0,0,unsafe_perception,none,none,none
+20071023X01635,0,0,,,0,unsafe_perception,none,none,none
+20071108X01763,0,0,,,0,none,none,none,none
+20081219X65251,0,0,,,0,none,none,none,none
+20071231X02010,0,0,,,0,none,none,none,none
+20071204X01893,0,0,,,0,none,none,none,none
+20071217X01939,1,0,0,0,0,unsafe_skill,none,none,none
+20081003X62958,0,0,,,0,none,none,none,none
+20080107X00024,1,0,0,0,0,unsafe_skill,dispatcher,14 CFR § 121.601: Dispatcher must provide pilot in command with all available weather reports and forecasts of weather phenomena that may affect the safety of flight.,none
+20080107X00025,0,0,,,0,unsafe_perception,none,none,none
+20071231X02012,0,0,,,0,unsafe_perception,Tug driver,O'Hare Airport Ground Motor Vehicle Operation Regulations Manual: 'All ground vehicle operators must yield the right-of-way to an aircraft in motion' and 'No person operating a ground vehicle will cross a Taxiway without bringing the vehicle to a complete stop.',none
+20071231X02013,0,0,,,0,unsafe_decision,none,none,none

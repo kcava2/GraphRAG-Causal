@@ -29,17 +29,20 @@ import copy
 import os
 import sys
 
+import math
+
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, balanced_accuracy_score
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 from data.ntsbdataloader import (get_dataloaders, ENV_SLICE, OPER_SLICE,  # noqa: E402
-                                 STEP_B_BASE, NTSB_CLEAN)
+                                 STEP_B_BASE, NTSB_CLEAN, FEWSHOT_DIM, FS_B, FS_C,
+                                 FS_D, FS_HAS_BC, FS_HAS_D, FS_SIM)
 
 
 # ---------------------------------------------------------------------------
@@ -143,10 +146,20 @@ class FewShotEncoder(nn.Module):
     mapping rather than a base rate.
     """
 
-    def __init__(self, fewshot_dim: int, out_dim: int = 32, dropout: float = 0.1):
+    def __init__(self, fewshot_dim: int, out_dim: int = 32, dropout: float = 0.1,
+                 tau: float = 0.1):
         super().__init__()
+        if fewshot_dim != FEWSHOT_DIM:
+            raise ValueError(f"exemplar width {fewshot_dim} != FEWSHOT_DIM {FEWSHOT_DIM}: "
+                             f"this checkpoint predates the current exemplar layout "
+                             f"and must be retrained")
         self.lstm = nn.LSTM(fewshot_dim, out_dim, batch_first=True)
         self.drop = nn.Dropout(dropout)
+        # Vote sharpness. Cosines between narratives sit in a narrow band (0.70-0.85),
+        # so weights proportional to similarity are nearly uniform; a softmax with a
+        # small temperature lets closer neighbours count for more. Learned, because
+        # the right sharpness differs between retrieval strategies.
+        self.log_tau = nn.Parameter(torch.tensor(math.log(tau)))
         # The encoder emits the learned summary AND the explicit similarity-weighted
         # vote, so `out_dim` seen by the rest of the model is the sum of the two.
         self.out_dim = out_dim + fewshot_dim
@@ -156,28 +169,44 @@ class FewShotEncoder(nn.Module):
 
         The learned half is an LSTM over the exemplar sequence, masked-mean-pooled.
         The second half is the similarity-weighted mean of the raw exemplar rows —
-        the k-NN vote, computed rather than learned.
+        the k-NN vote, computed rather than learned. Handing the model that
+        aggregate is an inductive bias, not extra information: every value is a
+        deterministic function of the exemplar block it already sees.
 
-        Concatenating the vote matters a great deal in practice. Measured directly
-        on the test split, a weighted vote over these exemplars predicts severity at
-        kappa 0.63, but a model given only the LSTM summary reached ~0.00: to
-        recover the vote the LSTM would have to learn, from 710 records, to attend
-        to the label columns and reweight them by the similarity column. Handing it
-        the aggregate is an inductive bias, not extra information — every value here
-        is a deterministic function of the exemplar block the model already sees.
+        Two details of the vote matter:
+
+        * Weights are softmax(similarity / tau) over the real neighbours. They were
+          similarity / sum(similarity) over a min-max-normalised score, which gave
+          the weakest neighbour weight exactly 0 and ranked the rest by position.
+        * Each LABEL block is averaged only over neighbours whose labels are known
+          (has_factor_labels / has_severity). A neighbour with no label used to
+          count as a confident negative. The vote's has_* entries end up holding
+          the share of weight that was labelled, so the model can tell a vote of
+          0.2 backed by every neighbour from one backed by a single neighbour.
         """
         if fewshot is None or fewshot.numel() == 0 or fewshot.size(1) == 0:
             n = fewshot.size(0) if fewshot is not None else 0
             return torch.zeros(n, self.out_dim, device=fewshot.device)
         m = fewshot_mask.unsqueeze(-1)                    # [batch, k, 1]
+        any_real = (m.sum(1) > 0).float()                 # [batch, 1]
 
         out, _ = self.lstm(fewshot)                       # [batch, k, lstm_out]
         pooled = (out * m).sum(1) / m.sum(1).clamp(min=1.0)
 
-        sim = fewshot[..., -1:].clamp(min=0.0) * m        # retrieval score, masked
-        w = sim / sim.sum(1, keepdim=True).clamp(min=1e-6)
+        tau = self.log_tau.exp().clamp(0.02, 1.0)
+        logit = (fewshot[..., FS_SIM:FS_SIM + 1] / tau).masked_fill(m == 0, -1e9)
+        w = torch.softmax(logit, dim=1) * m               # padding -> exactly 0
         vote = (fewshot * w).sum(1)                       # [batch, fewshot_dim]
-        vote = vote * (m.sum(1) > 0).float()              # no exemplars -> zeros
+
+        def known(block, flag):                           # vote over labelled rows only
+            wf = w * fewshot[..., flag:flag + 1]
+            return (fewshot[..., block] * wf).sum(1) / wf.sum(1).clamp(min=1e-6)
+
+        vote = torch.cat([
+            vote[:, :FS_B.start],
+            known(FS_B, FS_HAS_BC), known(FS_C, FS_HAS_BC), known(FS_D, FS_HAS_D),
+            vote[:, FS_D.stop:]], dim=1)
+        vote = vote * any_real                            # no exemplars -> zeros
 
         return self.drop(torch.cat([pooled, vote], dim=1))
 
@@ -192,9 +221,12 @@ class HFACSCausalLSTM(nn.Module):
 
     def __init__(self, hidden_size, n_B, n_C, n_D,
                  step_ctx_dim, step_b_dim, dropout=0.2,
-                 fewshot_dim=0, fewshot_out=32):
+                 fewshot_dim=0, fewshot_out=32, c_multilabel=False):
         super().__init__()
         self.hidden_size = hidden_size
+        # True: C is the four-tier multi-label head (sigmoid hand-off to D).
+        # False: a checkpoint from the binary violation-vs-error head (softmax).
+        self.c_multilabel = c_multilabel
         self.env_slice = ENV_SLICE                          # visual, light, tod (3)
         self.oper_slice = OPER_SLICE                        # person, pilot_hours (2)
         (self.has_priors, self._b_in, self.unsafe_slice, self.sev_slice,
@@ -276,7 +308,8 @@ class HFACSCausalLSTM(nn.Module):
             c_parts.append(fs_emb)                     # retrieval -> C, directly
         hC, cC = self.cell_c(self.proj_c(torch.cat(c_parts, 1)), (hB, cB))
         logits_C = self.head_c(self.drop(hC))
-        soft_C = torch.softmax(logits_C, 1).detach()   # C is single-label (violation vs error)
+        soft_C = (torch.sigmoid(logits_C) if self.c_multilabel
+                  else torch.softmax(logits_C, 1)).detach()
 
         d_parts = [soft_C, soft_B, env]
         if self.has_priors:
@@ -296,8 +329,9 @@ class HFACSCausalSCM(nn.Module):
 
     def __init__(self, hidden_size, n_B, n_C, n_D,
                  step_ctx_dim, step_b_dim, dropout=0.2,
-                 fewshot_dim=0, fewshot_out=32):
+                 fewshot_dim=0, fewshot_out=32, c_multilabel=False):
         super().__init__()
+        self.c_multilabel = c_multilabel
         self.env_slice = ENV_SLICE
         self.oper_slice = OPER_SLICE
         (self.has_priors, self._b_in, self.unsafe_slice, self.sev_slice,
@@ -329,7 +363,8 @@ class HFACSCausalSCM(nn.Module):
         if self.has_priors:
             c_parts.append(step_b[:, self.unsafe_slice])
         logits_C = self.f_C(torch.cat(c_parts, 1))
-        soft_C = torch.softmax(logits_C, 1).detach()   # C is single-label (violation vs error)
+        soft_C = (torch.sigmoid(logits_C) if self.c_multilabel
+                  else torch.softmax(logits_C, 1)).detach()
         d_parts = [soft_C, soft_B, env]
         if self.has_priors:
             d_parts.append(step_b[:, self.sev_slice])
@@ -347,7 +382,8 @@ def make_model(config: dict):
     arch = cfg.pop("arch", "lstm")
     # Bookkeeping recorded in the checkpoint so eval can rebuild the condition
     # (exemplar count, retrieval strategy, raw mode) — none are model arguments.
-    for k in ("fewshot_k", "condition", "strategy", "raw_mode", "seed"):
+    for k in ("fewshot_k", "condition", "strategy", "raw_mode", "seed",
+              "kg_factor_labels", "gate"):
         cfg.pop(k, None)
     return _ARCHS[arch](**cfg)
 
@@ -379,9 +415,15 @@ def train_epoch(model, loader, optimizer, crits, device):
     return total / max(len(loader), 1)
 
 
-# Per-head multi-label decision thresholds. Only B is multi-label now (C became a
-# binary single-label head, argmax-decoded like D).
-_ML_KEYS = ("B",)
+# Per-head multi-label decision thresholds. B and C are both multi-label; D is
+# argmax-decoded.
+_ML_KEYS = ("B", "C")
+
+# What each head's thresholds are tuned to maximise on validation. B keeps F1 so
+# its numbers stay comparable with earlier runs. C uses balanced accuracy: its
+# tiers run from 9% to 71% positive, and F1 on a 71% tier is maximised by calling
+# everything positive, which is the degenerate solution the README warns about.
+THRESHOLD_OBJECTIVE = {"B": "f1", "C": "balanced_acc"}
 
 
 def _apply_thr(logits, thr):
@@ -397,12 +439,13 @@ def evaluate(model, loader, device, thresholds=None):
     """
     Returns 6 values:
         all_B, all_C, all_D, pred_B, pred_C, pred_D
-    B is a multi-hot numpy array (preds use the tuned threshold, or sigmoid>0.5 if
-    none). C and D are 1-D arrays of class indices (argmax) — C is now binary
-    (violation vs error), D is severity. All callers unpack exactly 6 values.
-    `thresholds` is an optional {'B': vec}.
+    B and C are multi-hot numpy arrays (preds use the tuned thresholds, or
+    sigmoid>0.5 if none). D is a 1-D array of class indices (argmax). A model from
+    the binary-C era (c_multilabel False) still gets argmax class indices for C.
+    `thresholds` is an optional {'B': vec, 'C': vec}.
     """
     thr = thresholds or {}
+    multi_c = bool(getattr(model, "c_multilabel", False))
     model.eval()
     aB, aC, aD = [], [], []
     pB, pC, pD = [], [], []
@@ -412,18 +455,26 @@ def evaluate(model, loader, device, thresholds=None):
             fs, fsm = fs.to(device), fsm.to(device)
             lB, lC, lD = model(step_ctx, step_b, fs, fsm)
             pB.append(_apply_thr(lB, thr.get("B")))
-            pC.extend(lC.argmax(1).cpu().tolist())
+            pC.append(_apply_thr(lC, thr.get("C")) if multi_c
+                      else lC.argmax(1).cpu().numpy())
             pD.extend(lD.argmax(1).cpu().tolist())
             aB.append(yB.int().cpu().numpy())
-            aC.extend(yC.cpu().tolist())
+            aC.append(yC.int().cpu().numpy() if multi_c else yC.cpu().numpy())
             aD.extend(yD.cpu().tolist())
     cat = lambda xs: np.concatenate(xs, axis=0) if xs else np.empty((0,))
-    return (cat(aB), np.asarray(aC), np.asarray(aD),
-            cat(pB), np.asarray(pC), np.asarray(pD))
+    return (cat(aB), cat(aC), np.asarray(aD),
+            cat(pB), cat(pC), np.asarray(pD))
+
+
+def _threshold_score(y, pred, objective):
+    if objective == "balanced_acc":
+        return balanced_accuracy_score(y, pred) if 0 < y.sum() < len(y) else 0.0
+    return f1_score(y, pred, zero_division=0)
 
 
 def tune_thresholds(model, loader, device, grid=None):
-    """Per-class F1-optimal thresholds for B/C on a (validation) loader.
+    """Per-label thresholds for B and C on a (validation) loader, each head tuned
+    to its own THRESHOLD_OBJECTIVE.
 
     Counters the focal/imbalance collapse where sigmoid stays < 0.5 for rare-but-
     present classes. Classes with no positives in the split keep the 0.5 default.
@@ -438,7 +489,7 @@ def tune_thresholds(model, loader, device, grid=None):
             step_ctx, step_b = step_ctx.to(device), step_b.to(device)
             fs, fsm = fs.to(device), fsm.to(device)
             lB, lC, lD = model(step_ctx, step_b, fs, fsm)
-            for key, logits, y in (("B", lB, yB),):       # only B is multi-label
+            for key, logits, y in (("B", lB, yB), ("C", lC, yC)):
                 probs[key].append(torch.sigmoid(logits).cpu().numpy())
                 truth[key].append(y.cpu().numpy())
     out = {}
@@ -449,11 +500,12 @@ def tune_thresholds(model, loader, device, grid=None):
         for j in range(P.shape[1]):
             if Y[:, j].sum() == 0:
                 continue
-            best_f1, best_t = -1.0, 0.5
+            best, best_t = -1.0, 0.5
             for t in grid:
-                f1 = f1_score(Y[:, j], (P[:, j] >= t).astype(int), zero_division=0)
-                if f1 > best_f1:
-                    best_f1, best_t = f1, t
+                sc = _threshold_score(Y[:, j], (P[:, j] >= t).astype(int),
+                                      THRESHOLD_OBJECTIVE.get(key, "f1"))
+                if sc > best:
+                    best, best_t = sc, t
             thr[j] = best_t
         out[key] = thr
     return out
@@ -470,12 +522,13 @@ def _build_criteria(train_set, n_C, n_D, device, baseline=False):
     """
     if baseline:
         return (nn.BCEWithLogitsLoss(),
-                nn.CrossEntropyLoss(),
+                nn.BCEWithLogitsLoss(),
                 nn.CrossEntropyLoss(ignore_index=-100))
     crit_B = MultiLabelFocalLoss(pos_weight=pos_weights(train_set.y_B.numpy(), device))
-    # C is now single-label (violation vs error); D is severity (NTSB-only — drop the
-    # -100 masked ASIAS rows before computing class weights).
-    crit_C = FocalLoss(weight=class_weights(train_set.y_C.numpy(), n_C, device))
+    # C is multi-label over the four unsafe-act tiers, same loss family as B; its
+    # per-tier pos_weight matters more here (violation ~9%, perception ~14%).
+    # D is severity (NTSB-only — drop the -100 masked ASIAS rows before weighting).
+    crit_C = MultiLabelFocalLoss(pos_weight=pos_weights(train_set.y_C.numpy(), device))
     yD = train_set.y_D.numpy()
     crit_D = FocalLoss(weight=class_weights(yD[yD != -100], n_D, device))
     return crit_B, crit_C, crit_D
@@ -506,7 +559,7 @@ def train_model(train_loader, val_loader, encoders, hidden_size=128, lr=1e-4,
     config = dict(arch=arch, hidden_size=hidden_size,
                   n_B=encoders.n_B, n_C=encoders.n_C, n_D=encoders.n_severity,
                   step_ctx_dim=s_ctx.shape[1], step_b_dim=s_b.shape[1], dropout=dropout,
-                  fewshot_dim=fewshot_dim,
+                  fewshot_dim=fewshot_dim, c_multilabel=True,
                   # k is not a model hyperparameter (the encoder handles any
                   # sequence length) but eval must rebuild the SAME exemplar
                   # count, so it is recorded here.
@@ -559,7 +612,8 @@ def train_model(train_loader, val_loader, encoders, hidden_size=128, lr=1e-4,
     # they stay fixed at 0.5 — tuned thresholds are part of the machinery being
     # stripped, and with B now ~72% positive they would drift toward all-positive.
     if baseline:
-        thresholds = {"B": np.full(config["n_B"], 0.5, dtype="float32")}
+        thresholds = {"B": np.full(config["n_B"], 0.5, dtype="float32"),
+                      "C": np.full(config["n_C"], 0.5, dtype="float32")}
         if verbose:
             print("Baseline mode: thresholds fixed at 0.50 (not tuned).")
     else:

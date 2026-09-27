@@ -44,7 +44,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.join(_HERE, "data"))
 
-from data.ntsbdataloader import get_dataloaders, GraphFewShotSource, NTSB_CLEAN  # noqa: E402
+from data.ntsbdataloader import (get_dataloaders, GraphFewShotSource, NTSB_CLEAN,  # noqa: E402
+                                 retrieval_gate)
 from models.lstm.train import train_model  # noqa: E402
 
 RESULTS = os.path.join(_HERE, "results")
@@ -60,13 +61,19 @@ CONDITIONS = {
 }
 
 
-def build_source(strategy, raw_mode):
-    """GraphFewShotSource for a retrieval condition; None for C1."""
+def build_source(strategy, raw_mode, k, kg_factor_labels=False):
+    """GraphFewShotSource for a retrieval condition; None for C1.
+
+    `k` is handed to the retriever as well as to the dataset. It used to go only
+    to the dataset, and the retriever kept its own default of 5, so any
+    `--fewshot-k` above 5 produced exactly the same exemplars as 5.
+    """
     if strategy is None:
         return None, None
     from data.rag_retriever import build_retriever
-    retr = build_retriever(strategy=strategy)
-    return GraphFewShotSource(retr, raw_mode=raw_mode), retr
+    retr = build_retriever(strategy=strategy, k=k)
+    return GraphFewShotSource(retr, raw_mode=raw_mode,
+                              kg_factor_labels=kg_factor_labels), retr
 
 
 def run_condition(name, args, device):
@@ -85,8 +92,9 @@ def run_condition(name, args, device):
     print(header)
     print("=" * 68)
 
-    source, retr = build_source(strategy, raw_mode)
     k = 0 if strategy is None else args.fewshot_k
+    source, retr = build_source(strategy, raw_mode, k, args.kg_factor_labels)
+    gate = {}
     try:
         train_loader, val_loader, _test, encoders = get_dataloaders(
             filepath=args.input, batch_size=args.batch_size,
@@ -95,6 +103,11 @@ def run_condition(name, args, device):
                                              # Stage-2 few-shot index, and rebuilding
                                              # it silently changes extraction prompts
             fewshot_k=k, fewshot_source=source)
+        if k:
+            # What the exemplars can do on their own, before a single weight is
+            # trained. A label the vote cannot rank is a retrieval problem, and
+            # no amount of training downstream will fix it.
+            gate = retrieval_gate(val_loader.dataset, "val")
     except Exception as e:
         print(f"  FAILED building data: {type(e).__name__}: {e}")
         return False
@@ -116,7 +129,8 @@ def run_condition(name, args, device):
                 epochs=args.epochs, device=device, arch="lstm",
                 baseline=args.baseline, seed=seed, verbose=False)
             config.update(condition=name, strategy=strategy,
-                          raw_mode=raw_mode, seed=seed)
+                          raw_mode=raw_mode, seed=seed,
+                          kg_factor_labels=bool(args.kg_factor_labels), gate=gate)
             payload = {"state_dict": model.state_dict(), "config": config,
                        "thresholds": thresholds, "history": history}
             torch.save(payload, os.path.join(SEED_DIR, f"{name.lower()}_s{seed}.pt"))
@@ -134,8 +148,14 @@ def main():
     ap.add_argument("--input", default=NTSB_CLEAN)
     ap.add_argument("--only", nargs="+", choices=list(CONDITIONS), default=None,
                     help="Subset of conditions (default: all five).")
-    ap.add_argument("--fewshot-k", type=int, default=5,
-                    help="Exemplars retrieved per record for C2-C5.")
+    ap.add_argument("--fewshot-k", type=int, default=15,
+                    help="Exemplars retrieved per record for C2-C5. 15 was chosen on "
+                         "the validation retrieval gate: the rare unsafe-act tiers "
+                         "need more than 5 neighbours before a positive shows up.")
+    ap.add_argument("--kg-factor-labels", action="store_true",
+                    help="Let ASIAS/ASRS knowledge-graph neighbours vote on heads B "
+                         "and C. Off by default: their HFACS factors were mined under "
+                         "a different prompt and their base rates do not match NTSB.")
     ap.add_argument("--epochs", type=int, default=500)
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--hidden-size", type=int, default=128)

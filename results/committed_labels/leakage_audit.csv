@@ -1,0 +1,41 @@
+view,target,transfer_auc,within_auc,mean_chars,briefs_with_blocklist_hit
+full narrative,D severity,0.971,0.958,6643,
+full narrative,B operator,0.824,0.708,6643,
+full narrative,B personnel,0.744,0.699,6643,
+full narrative,B situational,0.88,0.812,6643,
+full narrative,C skill,0.805,0.745,6643,
+full narrative,C decision,0.811,0.743,6643,
+full narrative,C perception,0.904,0.859,6643,
+full narrative,C violation,0.81,0.6,6643,
+outcome-stripped (old C2 query),D severity,0.961,0.943,6122,
+outcome-stripped (old C2 query),B operator,0.815,0.69,6122,
+outcome-stripped (old C2 query),B personnel,0.739,0.725,6122,
+outcome-stripped (old C2 query),B situational,0.882,0.82,6122,
+outcome-stripped (old C2 query),C skill,0.811,0.748,6122,
+outcome-stripped (old C2 query),C decision,0.816,0.753,6122,
+outcome-stripped (old C2 query),C perception,0.904,0.84,6122,
+outcome-stripped (old C2 query),C violation,0.784,0.592,6122,
+L2 preliminary,D severity,0.948,0.924,735,0.0
+L2 preliminary,B operator,0.721,0.612,735,0.0
+L2 preliminary,B personnel,0.644,0.613,735,0.0
+L2 preliminary,B situational,0.795,0.685,735,0.0
+L2 preliminary,C skill,0.802,0.723,735,0.0
+L2 preliminary,C decision,0.754,0.717,735,0.0
+L2 preliminary,C perception,0.906,0.8,735,0.0
+L2 preliminary,C violation,0.718,0.556,735,0.0
+L1b circumstances+phase,D severity,0.881,0.802,614,0.0
+L1b circumstances+phase,B operator,0.676,0.596,614,0.0
+L1b circumstances+phase,B personnel,0.628,0.579,614,0.0
+L1b circumstances+phase,B situational,0.628,0.593,614,0.0
+L1b circumstances+phase,C skill,0.77,0.702,614,0.0
+L1b circumstances+phase,C decision,0.674,0.557,614,0.0
+L1b circumstances+phase,C perception,0.808,0.675,614,0.0
+L1b circumstances+phase,C violation,0.612,0.551,614,0.0
+L1 pre-departure,D severity,0.577,0.626,384,0.0
+L1 pre-departure,B operator,0.545,0.548,384,0.0
+L1 pre-departure,B personnel,0.498,0.505,384,0.0
+L1 pre-departure,B situational,0.539,0.485,384,0.0
+L1 pre-departure,C skill,0.577,0.575,384,0.0
+L1 pre-departure,C decision,0.509,0.515,384,0.0
+L1 pre-departure,C perception,0.544,0.49,384,0.0
+L1 pre-departure,C violation,0.51,0.516,384,0.0

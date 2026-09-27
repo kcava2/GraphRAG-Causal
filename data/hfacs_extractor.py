@@ -505,6 +505,20 @@ def _build_unsafe_prompt(row: pd.Series, fewshot: str) -> str:
         'that type of act; quote the supporting phrase as the factor and name the '
         'human. Do NOT assign tiers by default — most accidents involve one or two, '
         'rarely all four.\n'
+        # The committed extraction used `unsafe_violation` for almost any
+        # non-compliance (passengers ignoring the seatbelt sign, an operator not
+        # acting on a bulletin). HFACS separates violations from errors by INTENT,
+        # so the tier is now spelled out. This affects future extraction runs only;
+        # the labels already in hfacs_results.csv are repaired by
+        # adjudicate_violation.py, which applies the same three conditions.
+        '- unsafe_violation is ONLY for a KNOWING deviation: (1) by someone in an '
+        'operational role (flight crew, cabin crew, maintenance, ATC, dispatch, ground '
+        'crew) — NEVER a passenger, and never an operator or manufacturer as an '
+        'organization; (2) from a specific, identifiable rule, procedure, clearance or '
+        'limitation; (3) where the narrative shows they knew it and chose not to '
+        'follow it. If a rule was broken through forgetting, misjudging or not '
+        'noticing, that is unsafe_decision, unsafe_skill or unsafe_perception, not a '
+        'violation.\n'
         '- At least ONE unsafe-act tier is required (every accident has one).\n'
         'Respond with valid JSON only, in the shape:\n'
         '{"entities": [{"text": "...", "role": "...", "tier": "..."}], '

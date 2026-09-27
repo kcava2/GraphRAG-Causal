@@ -1,0 +1,31 @@
+  Violation override: 87 removed, 17 added, 8 re-filed as an error tier (violation_adjudication.csv).
+
+TRANSFER probe (trained on full train narratives)
+view           full narrative  outcome-stripped (old C2 query)  L2 preliminary  L1b circumstances+phase  L1 pre-departure
+target                                                                                                                   
+B operator              0.824                            0.815           0.721                    0.676             0.545
+B personnel             0.744                            0.739           0.644                    0.628             0.498
+B situational           0.880                            0.882           0.795                    0.628             0.539
+C decision              0.813                            0.816           0.752                    0.674             0.509
+C perception            0.898                            0.899           0.903                    0.804             0.543
+C skill                 0.803                            0.808           0.797                    0.766             0.563
+C violation             0.920                            0.915           0.693                    0.358             0.462
+D severity              0.971                            0.961           0.948                    0.881             0.577
+
+WITHIN probe (5-fold CV on the test text itself)
+view           full narrative  outcome-stripped (old C2 query)  L2 preliminary  L1b circumstances+phase  L1 pre-departure
+target                                                                                                                   
+B operator              0.708                            0.690           0.612                    0.596             0.548
+B personnel             0.699                            0.725           0.613                    0.579             0.505
+B situational           0.812                            0.820           0.685                    0.593             0.485
+C decision              0.743                            0.753           0.717                    0.557             0.515
+C perception            0.859                            0.840           0.800                    0.675             0.490
+C skill                 0.730                            0.741           0.706                    0.677             0.564
+C violation               NaN                              NaN             NaN                      NaN               NaN
+D severity              0.958                            0.943           0.924                    0.802             0.626
+
+Blocklist hits: {'L1 pre-departure': 0, 'L1b circumstances+phase': 0, 'L2 preliminary': 0}
+
+L1  severity leakage: transfer 0.577, within 0.626 (gate 0.65; structured-only is ~0.57) -> PASS
+L1b severity leakage: transfer 0.881, within 0.802 (not gated: diagnostic: what the phase of flight alone gives away)
+L2  severity leakage: transfer 0.948, within 0.924 (not gated: severity is known at L2, so head D is not scored there)

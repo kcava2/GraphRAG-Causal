@@ -39,7 +39,55 @@ Concretely the system:
 
 ---
 
-## TL;DR of current state
+## TL;DR of current state (iteration 2026-09-18, L2 standard since 2026-09-27)
+
+Held-out test split, `n = 202`. Balanced accuracy, mean over **5 seeds**, k = 15
+exemplars, four-tier head C, repaired violation labels. Full detail and the list of
+what changed: [CHANGELOG_2026-09-18.md](CHANGELOG_2026-09-18.md).
+
+**The standard view is L2.** The test record is looked up by a *preliminary brief*: the
+circumstances of the flight, the kind of event and its sequence, with no injury or
+damage wording and no causal attribution. That is what an analyst holds a few days to
+two weeks after an occurrence. Only the 202 test records are rewritten; training text,
+the exemplar pool, the knowledge graph, the indexes and the labels are untouched.
+
+| head, L2 query | C1 no RAG | **C2 semantic** | C3 structural | C4 hybrid | C5 raw RAG |
+|---|---|---|---|---|---|
+| **B** preconditions | 0.514 | **0.596** | 0.526 | 0.546 | 0.535 |
+| **C** unsafe acts, 3 error tiers | 0.525 | **0.671** | 0.536 | 0.663 | 0.642 |
+| **C** incl. violation (2 test positives) | 0.515 | **0.623** | 0.524 | 0.616 | 0.602 |
+| **D** severity | not scored | not scored | not scored | not scored | not scored |
+
+Head D is not scored under L2 because injuries and damage are already known when a
+preliminary report exists, and the L2 text alone predicts severity at AUC 0.95. Scored
+on request (`--include-severity`) C2 reaches 0.883, which measures recognising the kind
+of event, not predicting the outcome.
+
+**Bounds, C2 semantic (same checkpoints, only the test records' retrieval text changes):**
+
+| query view | B | C, 3 error tiers | D |
+|---|---|---|---|
+| full narrative incl. probable cause (upper bound, retrospective) | 0.597 | 0.700 | 0.899 |
+| **L2 preliminary brief (standard)** | **0.596** | **0.671** | not scored |
+| L1 pre-departure brief (lower bound, passes the severity leakage gate) | 0.507 | 0.513 | 0.559 |
+| C1, no retrieval | 0.514 | 0.525 | 0.569 |
+
+Read it as three findings. **Head C works now**: 0.53 (kappa 0.02) on the old binary
+target, 0.67 (kappa 0.27) on the three error tiers at L2. **L2 costs little**: moving
+from the full report to the preliminary brief takes head C from 0.70 to 0.67 and leaves
+head B unchanged, so most of what retrieval contributes does not depend on reading the
+outcome or the probable cause. **Nothing is predictable before departure**: with a query
+that reads as a flight that has not happened yet, every head falls to the no-retrieval
+baseline, severity included. Caveats that matter: Neo4j was not running for this run, so
+C3-C5 used the in-distribution structural match only and the KG exemplar path is
+untested; the strict violation tier has 21 positives in the corpus and 2 in the test
+split, so it cannot be scored; severity and the head C tiers are correlated (decision
+errors: 85% of high-severity events, 59% of low), so part of head C's skill is knowing
+the kind of event, which L2 states outright.
+
+---
+
+## TL;DR before the 2026-09-18 iteration (binary head C, k = 5, kept for reference)
 
 Held-out test split, `n = 202` NTSB Part-121 events. Mean +/- sd over **5 seeds**.
 `*` = paired t-test vs C1 across seeds, p < 0.05. Conditions are a retrieval-STRATEGY
@@ -116,6 +164,13 @@ data/
   rag_retriever.py       Stage 5   hybrid FAISS + Cypher retrieval -> soft priors
                                    (legacy input-augmentation path)
   compare_extractions.py           per-tier prevalence of two extraction runs
+  adjudicate_violation.py Stage 2b strict, consensus re-labelling of unsafe_violation
+                                   -> violation_adjudication.csv (a label OVERRIDE)
+  build_query_views.py   Stage 6b  L2 (standard) and L1 (lower bound) briefs for the
+                                   TEST split only -> test_query_views.csv
+  leakage_audit.py       Stage 6b  the gate: L2 free of outcome/cause wording, L1 must
+                                   not predict severity
+  ollama_json.py                   schema-constrained Ollama helper for the two above
   standardize.py         Stage 1   shared vocabulary + strip_outcome() for retrieval text
   hfacs_analysis.py      figures: extraction distributions / co-occurrence / coverage
   hfacs_tier_counts.py   figure:  event counts per HFACS tier
@@ -125,7 +180,9 @@ models/
   lstm/test.py           single-checkpoint test-split metrics
   lstm/val.py            single-checkpoint validation-split metrics
   lstm/ensemble.py       Stage 6   RAG-as-a-model, blended at alpha tuned on val
-  lstm/eval_conditions.py Stage 6  C1..C5 metrics, paired t-tests, figures
+  lstm/eval_conditions.py Stage 6  C1..C5 metrics per head AND per label, bootstrap
+                                   intervals, paired t-tests, --query-view L2|L1|full
+                                   (L2 is the default)
   causal_discovery.py    PC algorithm vs the theoretical HFACS DAG
   eval_utils.py          shared plotting for Stage 6
 run_conditions.py        Stage 4   trains C1..C5 across seeds -> results/seeds/
@@ -171,7 +228,7 @@ derives its label spaces from it. Every other module imports it. **Do not fork i
 | **Organizational / Supervisory** | *Not* text-mined, *not* predicted. Represented as **structured economic context** (`step_ctx`): airline employment, fuel cost, operating revenue and load factor, quarter-over-quarter. | Narratives almost never state organizational causes, so the mined labels were near-empty and the heads sat at chance. The economic proxy preserves the HFACS edge (organizational pressure → preconditions) without a data-starved head. |
 | **Preconditions — physical environment** (`situational_phys`: Weather/Lighting/Terrain) | *Not* mined. Supplied as structured inputs (`visual_condition`, `light_conditions`). | These are recorded fields; mining them from text would be strictly worse. |
 | **Preconditions — the rest** (operator mental/physical/limits, personnel CRM/readiness, situational tech) | **Head B.** Mined, then collapsed from 6 tiers to **3 multi-label groups**. | The raw tiers were unlearnably rare (`operator_limits` 4%, `personnel_readiness` 1% = 13 records). Groups: `precond_operator`, `precond_personnel`, `precond_situational`. |
-| **Unsafe Acts** (skill / decision / perception / violation) | **Head C**, collapsed to a **binary** target: 1 if an `unsafe_violation` was extracted, else 0. | Same reason — `unsafe_perception` at 6% pinned a 4-way head at chance. Full 4-tier multi-label C is explicitly future work. |
+| **Unsafe Acts** (skill / decision / perception / violation) | **Head C**, **four tiers, multi-label** (one sigmoid per tier, thresholds tuned on validation). | It was a binary violation-vs-error target while `unsafe_perception` sat at 6%. On the current extraction the tiers are 71 / 31 / 14 / 9%, and the binary target was the worst of them: 15 test positives and a label two extraction runs agree on at kappa 0.10. Multi-label because 23% of records carry two or more tiers. The violation tier is re-labelled under the strict HFACS definition by `data/adjudicate_violation.py`. |
 | **Outcome** | **Head D**, binary severity (high / low). | See §5. |
 
 Those collapses are defined at
@@ -363,11 +420,12 @@ step_ctx (8) : employment_qoq, fuel_qoq, revenue_qoq, loadfactor_qoq,
 step_b   (5) : visual_condition, light_conditions, time_of_day,
                person_involved, pilot_hours_bracket              <- environment / crew
 
-few-shot     : k exemplars x 13, retrieved from the TRAIN split  <- current design
-               [ the 5 features above | y_B(3) | y_C(2) | y_D(2) | similarity ]
-               encoded by FewShotEncoder -> 32 dims, concatenated onto step_ctx
+few-shot     : k exemplars x 37 (k = 15), retrieved from the TRAIN split  <- current design
+               [ the 5 features above | y_B(3) | y_C(4) | y_D(2) | causal roles(20)
+                 | has_factor_labels | has_severity | similarity ]
+               encoded by FewShotEncoder -> 32 dims + the 37-dim weighted vote
 
-[legacy]     : precond_prior(3) | unsafe_prior(2) | severity_prior(2) appended to
+[legacy]     : precond_prior(3) | unsafe_prior(4) | severity_prior(2) appended to
                step_b — the input-augmentation path used for C4..C8 (see below)
 ```
 
@@ -418,10 +476,12 @@ RETRIEVAL — never in Stage-2 extraction, so `hfacs_results.csv` stays comparab
 **does not achieve its goal**: stripped text still predicts severity at balanced
 accuracy 0.914 versus 0.923 raw. See the severity caveat in the TL;DR.
 
-**Exemplars carry the extracted causal chain.** Each exemplar is 33 dims:
+**Exemplars carry the extracted causal chain.** Each exemplar is 37 dims (the layout
+is defined once, as the `FS_*` slices in `data/ntsbdataloader.py`):
 
 ```
-[ 5 base features | y_B(3) | y_C(2) | y_D(2) | causal roles(20) | similarity(1) ]
+[ 5 base features | y_B(3) | y_C(4) | y_D(2) | causal roles(20)
+  | has_factor_labels(1) | has_severity(1) | similarity(1) ]
 ```
 
 The causal block is a role vector over the 10 mined tiers — for each tier, did it act as
@@ -561,9 +621,23 @@ python data/hfacs_extractor.py --force-binary --model qwen2.5:7b
 python data/kg_builder.py --source both
 python data/kg_builder.py --faiss-only
 
-# Stage 4/6 - train and evaluate the five conditions (5 seeds each, ~25 min)
-python run_conditions.py --epochs 500 --seeds 0 1 2 3 4
-python models/lstm/eval_conditions.py
+# Stage 2b - repair the violation tier (strict HFACS definition, majority of 3 runs).
+#   Writes data/violation_adjudication.csv, which the dataloader applies as an
+#   override on top of hfacs_results.csv. HFACS_VIOLATION_OVERRIDE=0 ignores it.
+python data/adjudicate_violation.py
+
+# Stage 4/6 - train and evaluate the five conditions (5 seeds each, ~45 min on CPU)
+python run_conditions.py --epochs 500 --seeds 0 1 2 3 4      # k = 15 exemplars
+
+# Stage 6b - what the TEST record is allowed to know. Rewrites the retrieval text of
+#   the 202 test records only; nothing is retrained and no index is rebuilt.
+python data/build_query_views.py          # L2 preliminary (standard) + L1 pre-departure
+python data/leakage_audit.py              # gate, exit 2 = FAIL
+python models/lstm/eval_conditions.py                       # L2, the standard view
+python models/lstm/eval_conditions.py --query-view L1       # lower bound
+python models/lstm/eval_conditions.py --query-view full     # upper bound (retrospective)
+#   optional: --include-severity scores head D under L2 (not a prediction, see TL;DR)
+#   optional diagnostic: build_query_views.py --tiers L1b ; eval --query-view L1b
 
 #   subset / quick check
 python run_conditions.py --only C1 C2 --seeds 0 --epochs 120

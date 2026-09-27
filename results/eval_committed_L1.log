@@ -1,0 +1,156 @@
+Query view L1: retrieval text replaced for 202 TEST records (mean 385 chars, was 6676).
+Test records: 202 | device: cpu | query view: L1
+C1: evaluated 5 seed(s)
+WARNING:root:RAG: Neo4j unavailable (Couldn't connect to localhost:7687 (resolved to ('[::1]:7687', '127.0.0.1:7687')):
+Failed to establish connection to ResolvedIPv6Address(('::1', 7687, 0, 0)) (reason [WinError 10061] No connection could be made because the target machine actively refused it)
+Failed to establish connection to ResolvedIPv4Address(('127.0.0.1', 7687)) (reason [WinError 10061] No connection could be made because the target machine actively refused it)) — Cypher mode disabled.
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|##########| 199/199 [00:00<00:00, 5781.28it/s]
+  Graph few-shot source: 0 KG events + 710 in-distribution train records (710 with severity, 710 voting on B/C).
+  Few-shot exemplars: 202/202 records got >=1 (k=15).
+  Retrieval gate [test/C2/L1] vote AUC: B:operator 0.543  B:personnel 0.541  B:situational 0.502  C:skill 0.540  C:decision 0.525  C:perception 0.495  C:violation 0.656  D:severity 0.608  | mean similarity 0.554, exemplars/record 14.8
+C2: evaluated 5 seed(s)
+WARNING:root:RAG: Neo4j unavailable (Couldn't connect to localhost:7687 (resolved to ('[::1]:7687', '127.0.0.1:7687')):
+Failed to establish connection to ResolvedIPv6Address(('::1', 7687, 0, 0)) (reason [WinError 10061] No connection could be made because the target machine actively refused it)
+Failed to establish connection to ResolvedIPv4Address(('127.0.0.1', 7687)) (reason [WinError 10061] No connection could be made because the target machine actively refused it)) — Cypher mode disabled.
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|##########| 199/199 [00:00<00:00, 6723.05it/s]
+  Graph few-shot source: 0 KG events + 710 in-distribution train records (710 with severity, 710 voting on B/C).
+  Few-shot exemplars: 202/202 records got >=1 (k=15).
+  Retrieval gate [test/C3/L1] vote AUC: B:operator 0.511  B:personnel 0.498  B:situational 0.505  C:skill 0.478  C:decision 0.468  C:perception 0.457  C:violation 0.470  D:severity 0.504  | mean similarity 0.897, exemplars/record 15.0
+C3: evaluated 5 seed(s)
+WARNING:root:RAG: Neo4j unavailable (Couldn't connect to localhost:7687 (resolved to ('[::1]:7687', '127.0.0.1:7687')):
+Failed to establish connection to ResolvedIPv6Address(('::1', 7687, 0, 0)) (reason [WinError 10061] No connection could be made because the target machine actively refused it)
+Failed to establish connection to ResolvedIPv4Address(('127.0.0.1', 7687)) (reason [WinError 10061] No connection could be made because the target machine actively refused it)) — Cypher mode disabled.
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|##########| 199/199 [00:00<00:00, 6749.58it/s]
+  Graph few-shot source: 0 KG events + 710 in-distribution train records (710 with severity, 710 voting on B/C).
+  Few-shot exemplars: 202/202 records got >=1 (k=15).
+  Retrieval gate [test/C4/L1] vote AUC: B:operator 0.588  B:personnel 0.509  B:situational 0.488  C:skill 0.525  C:decision 0.526  C:perception 0.512  C:violation 0.457  D:severity 0.579  | mean similarity 0.670, exemplars/record 15.0
+C4: evaluated 5 seed(s)
+WARNING:root:RAG: Neo4j unavailable (Couldn't connect to localhost:7687 (resolved to ('[::1]:7687', '127.0.0.1:7687')):
+Failed to establish connection to ResolvedIPv6Address(('::1', 7687, 0, 0)) (reason [WinError 10061] No connection could be made because the target machine actively refused it)
+Failed to establish connection to ResolvedIPv4Address(('127.0.0.1', 7687)) (reason [WinError 10061] No connection could be made because the target machine actively refused it)) — Cypher mode disabled.
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|##########| 199/199 [00:00<00:00, 6949.07it/s]
+  Graph few-shot source: 0 KG events + 710 in-distribution train records (710 with severity, 0 voting on B/C) [raw mode: no factor labels].
+  Few-shot exemplars: 202/202 records got >=1 (k=15).
+  Retrieval gate [test/C5/L1] vote AUC: B:operator 0.500  B:personnel 0.500  B:situational 0.500  C:skill 0.500  C:decision 0.500  C:perception 0.500  C:violation 0.500  D:severity 0.579  | mean similarity 0.670, exemplars/record 15.0
+C5: evaluated 5 seed(s)
+Bootstrapping 1000 resamples of the test records ...
+  saved figures\cond_metrics_table_L1.png
+  saved figures\cond_stats_table_L1.png
+  saved figures\cond_performance_L1.png
+  saved figures\cond_kappa_L1.png
+  saved figures\cond_headC_tiers_L1.png
+
+==============================================================================
+condition     head  balanced_acc          kappa           AUC            F1  support n_seeds
+       C1        B 0.500 ± 0.003  0.000 ± 0.003 0.578 ± 0.005 0.704 ± 0.004      328       5
+       C1        C 0.517 ± 0.008  0.020 ± 0.010 0.510 ± 0.011 0.281 ± 0.010      244       5
+       C1 C-noviol 0.525 ± 0.012  0.027 ± 0.014 0.546 ± 0.009 0.341 ± 0.013      229       5
+       C1        D 0.561 ± 0.022  0.122 ± 0.046 0.581 ± 0.005 0.558 ± 0.026       91       5
+       C2        B 0.505 ± 0.004  0.013 ± 0.012 0.525 ± 0.013 0.787 ± 0.006      328       5
+       C2        C 0.521 ± 0.016  0.023 ± 0.023 0.549 ± 0.003 0.443 ± 0.056      244       5
+       C2 C-noviol 0.514 ± 0.016  0.026 ± 0.028 0.539 ± 0.008 0.539 ± 0.074      229       5
+       C2        D 0.574 ± 0.017  0.146 ± 0.033 0.575 ± 0.007 0.571 ± 0.017       91       5
+       C3        B 0.517 ± 0.016  0.038 ± 0.034 0.586 ± 0.004 0.709 ± 0.010      328       5
+       C3        C 0.525 ± 0.007  0.026 ± 0.011 0.514 ± 0.009 0.277 ± 0.030      244       5
+       C3 C-noviol 0.529 ± 0.010  0.034 ± 0.015 0.553 ± 0.006 0.336 ± 0.042      229       5
+       C3        D 0.556 ± 0.016  0.111 ± 0.032 0.564 ± 0.010 0.553 ± 0.017       91       5
+       C4        B 0.506 ± 0.008  0.020 ± 0.012 0.571 ± 0.007 0.717 ± 0.009      328       5
+       C4        C 0.515 ± 0.012  0.015 ± 0.010 0.536 ± 0.008 0.346 ± 0.035      244       5
+       C4 C-noviol 0.508 ± 0.010  0.016 ± 0.014 0.523 ± 0.006 0.416 ± 0.040      229       5
+       C4        D 0.529 ± 0.013  0.059 ± 0.025 0.540 ± 0.011 0.529 ± 0.013       91       5
+       C5        B 0.500 ± 0.007  0.002 ± 0.008 0.552 ± 0.011 0.710 ± 0.005      328       5
+       C5        C 0.501 ± 0.009 -0.001 ± 0.017 0.542 ± 0.004 0.419 ± 0.031      244       5
+       C5 C-noviol 0.500 ± 0.014 -0.003 ± 0.024 0.532 ± 0.002 0.504 ± 0.036      229       5
+       C5        D 0.525 ± 0.011  0.050 ± 0.022 0.553 ± 0.006 0.524 ± 0.010       91       5
+ MAJORITY        B         0.500          0.000         0.500         0.790      328       -
+ MAJORITY        C         0.500          0.000         0.500         0.628      244       -
+ MAJORITY        D         0.500          0.000         0.500         0.355       91       -
+ MAJORITY C-noviol         0.500          0.000         0.500         0.650      229       -
+
+Per-label means over seeds:
+                 balanced_acc                              kappa                                AUC                            
+condition                  C1     C2     C3     C4     C5     C1     C2     C3     C4     C5     C1     C2     C3     C4     C5
+head label                                                                                                                     
+B    operator           0.500  0.506  0.531  0.523  0.504  0.000  0.017  0.086  0.065  0.010  0.535  0.509  0.560  0.573  0.541
+     personnel          0.500  0.500  0.506  0.500  0.500  0.000  0.000  0.015  0.000  0.000  0.626  0.561  0.620  0.609  0.579
+     situational        0.500  0.508  0.514  0.494  0.496  0.000  0.022  0.012 -0.005 -0.003  0.575  0.505  0.577  0.532  0.535
+C    decision           0.532  0.515  0.519  0.506  0.495  0.045  0.022  0.027  0.009 -0.014  0.529  0.550  0.541  0.509  0.505
+     perception         0.556  0.513  0.554  0.540  0.521  0.058  0.026  0.051  0.075  0.030  0.604  0.539  0.592  0.586  0.594
+     skill              0.487  0.514  0.515  0.480  0.483 -0.020  0.029  0.024 -0.037 -0.024  0.504  0.528  0.525  0.475  0.498
+     violation          0.494  0.542  0.510  0.534  0.506 -0.002  0.016  0.003  0.014  0.002  0.402  0.580  0.397  0.575  0.571
+
+Bootstrap 95% intervals over test records (seed-mean statistic), AUC:
+            ci_low                             ci_high                            
+condition       C1     C2     C3     C4     C5      C1     C2     C3     C4     C5
+head                                                                              
+B            0.525  0.471  0.533  0.510  0.495   0.632  0.583  0.642  0.636  0.605
+C            0.461  0.487  0.463  0.477  0.484   0.565  0.610  0.567  0.598  0.603
+C-noviol     0.492  0.485  0.497  0.464  0.474   0.602  0.601  0.608  0.583  0.590
+C:violation  0.279  0.418  0.283  0.413  0.397   0.526  0.728  0.515  0.733  0.752
+D            0.506  0.501  0.493  0.464  0.476   0.659  0.656  0.646  0.618  0.632
+
+Paired t-tests vs C1 (seeds as replicates):
+condition     head       metric  C1_mean  cond_mean   delta  n_seeds  p_value significant
+       C2        B        kappa   0.0001     0.0130  0.0129        5   0.0473         yes
+       C2        B balanced_acc   0.5001     0.5046  0.0045        5   0.0270         yes
+       C2        B          AUC   0.5785     0.5250 -0.0534        5   0.0013         yes
+       C3        B        kappa   0.0001     0.0375  0.0374        5   0.0782          no
+       C3        B balanced_acc   0.5001     0.5169  0.0169        5   0.1027          no
+       C3        B          AUC   0.5785     0.5858  0.0073        5   0.0761          no
+       C4        B        kappa   0.0001     0.0199  0.0198        5   0.0302         yes
+       C4        B balanced_acc   0.5001     0.5056  0.0055        5   0.2456          no
+       C4        B          AUC   0.5785     0.5714 -0.0071        5   0.1981          no
+       C5        B        kappa   0.0001     0.0024  0.0023        5   0.5610          no
+       C5        B balanced_acc   0.5001     0.4999 -0.0001        5   0.9655          no
+       C5        B          AUC   0.5785     0.5515 -0.0269        5   0.0034         yes
+       C2        C        kappa   0.0201     0.0233  0.0032        5   0.7982          no
+       C2        C balanced_acc   0.5174     0.5208  0.0034        5   0.6894          no
+       C2        C          AUC   0.5100     0.5493  0.0393        5   0.0005         yes
+       C3        C        kappa   0.0201     0.0265  0.0064        5   0.3444          no
+       C3        C balanced_acc   0.5174     0.5246  0.0071        5   0.2260          no
+       C3        C          AUC   0.5100     0.5139  0.0039        5   0.5649          no
+       C4        C        kappa   0.0201     0.0155 -0.0046        5   0.6367          no
+       C4        C balanced_acc   0.5174     0.5149 -0.0025        5   0.7713          no
+       C4        C          AUC   0.5100     0.5361  0.0261        5   0.0302         yes
+       C5        C        kappa   0.0201    -0.0014 -0.0215        5   0.1041          no
+       C5        C balanced_acc   0.5174     0.5012 -0.0162        5   0.0753          no
+       C5        C          AUC   0.5100     0.5420  0.0320        5   0.0056         yes
+       C2        D        kappa   0.1220     0.1461  0.0241        5   0.3242          no
+       C2        D balanced_acc   0.5613     0.5741  0.0128        5   0.2903          no
+       C2        D          AUC   0.5809     0.5748 -0.0061        5   0.1396          no
+       C3        D        kappa   0.1220     0.1107 -0.0113        5   0.7542          no
+       C3        D balanced_acc   0.5613     0.5560 -0.0053        5   0.7660          no
+       C3        D          AUC   0.5809     0.5642 -0.0167        5   0.0107         yes
+       C4        D        kappa   0.1220     0.0589 -0.0631        5   0.0551          no
+       C4        D balanced_acc   0.5613     0.5294 -0.0319        5   0.0506          no
+       C4        D          AUC   0.5809     0.5400 -0.0409        5   0.0003         yes
+       C5        D        kappa   0.1220     0.0496 -0.0724        5   0.0602          no
+       C5        D balanced_acc   0.5613     0.5249 -0.0364        5   0.0580          no
+       C5        D          AUC   0.5809     0.5531 -0.0278        5   0.0007         yes
+       C2 C-noviol        kappa   0.0275     0.0257 -0.0018        5   0.9088          no
+       C2 C-noviol balanced_acc   0.5252     0.5138 -0.0113        5   0.2681          no
+       C2 C-noviol          AUC   0.5458     0.5389 -0.0069        5   0.2765          no
+       C3 C-noviol        kappa   0.0275     0.0343  0.0068        5   0.4550          no
+       C3 C-noviol balanced_acc   0.5252     0.5294  0.0043        5   0.5805          no
+       C3 C-noviol          AUC   0.5458     0.5528  0.0070        5   0.2275          no
+       C4 C-noviol        kappa   0.0275     0.0159 -0.0115        5   0.3867          no
+       C4 C-noviol balanced_acc   0.5252     0.5085 -0.0167        5   0.1598          no
+       C4 C-noviol          AUC   0.5458     0.5231 -0.0227        5   0.0205         yes
+       C5 C-noviol        kappa   0.0275    -0.0026 -0.0301        5   0.1004          no
+       C5 C-noviol balanced_acc   0.5252     0.4997 -0.0255        5   0.0689          no
+       C5 C-noviol          AUC   0.5458     0.5323 -0.0135        5   0.0446         yes
+
+McNemar vs C1 (seed 0):
+condition head  helps  hurts  net  p_value significant
+       C2    B    163     38  125  0.00000         yes
+       C2    C    222     89  133  0.00000         yes
+       C2    D     52     58   -6  0.63355          no
+       C3    B     46      9   37  0.00000         yes
+       C3    C     66     40   26  0.01517         yes
+       C3    D     10     19   -9  0.13739          no
+       C4    B     63     13   50  0.00000         yes
+       C4    C    181     74  107  0.00000         yes
+       C4    D     39     49  -10  0.33736          no
+       C5    B     24      7   17  0.00406         yes
+       C5    C    141    135    6  0.76344          no
+       C5    D     36     48  -12  0.23006          no

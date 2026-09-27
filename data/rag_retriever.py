@@ -45,13 +45,63 @@ if _HERE not in sys.path:
 
 from hfacs_extractor import DEFAULT_MODEL, _clean  # noqa: E402
 from ntsbdataloader import (  # noqa: E402  (label spaces — single source of truth)
-    ORG_SUBS, SUP_SUBS, PRECOND_SUBS, PRECOND_GROUP_INDEX,
+    ORG_SUBS, SUP_SUBS, PRECOND_SUBS, PRECOND_GROUP_INDEX, UNSAFE_SUBS,
     UNSAFE_VIOLATION_TIER, N_O, N_A, N_B, N_C, RETRIEVAL_MODEL,
 )
 from standardize import binarize_severity, strip_outcome  # noqa: E402
 
+# Embedding caches shared by every retriever in the process. The encoder runs on
+# CPU in this environment, and one run builds several retrievers (C2, C4, C5, then
+# evaluation) over the same narratives; without these each would re-encode the
+# whole corpus. Keyed by encoder name so a changed RETRIEVAL_MODEL cannot collide.
+_QUERY_EMB = {}   # (model, stripped text) -> [1, dim]
+_EMB_DIR = os.path.join(_HERE, ".emb_cache")
+
+
+def _emb_path(text: str) -> str:
+    import hashlib
+    h = hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest()
+    return os.path.join(_EMB_DIR, RETRIEVAL_MODEL.replace("/", "_"), h[:2], h + ".npy")
+
+
+def embed_many(sbert, texts) -> np.ndarray:
+    """[n, dim] normalised vectors for already-stripped `texts`: memory, then the
+    on-disk cache, then one batched encode for whatever is left.
+
+    The disk cache is what keeps training and the per-view evaluations (separate
+    processes) from each re-encoding the corpus on CPU. A vector is a pure function
+    of (encoder, text), so the cache can never go stale; delete data/.emb_cache to
+    reclaim the space.
+    """
+    texts = [str(t) for t in texts]
+    todo = []
+    for t in dict.fromkeys(texts):
+        if (RETRIEVAL_MODEL, t) in _QUERY_EMB:
+            continue
+        fp = _emb_path(t)
+        if os.path.exists(fp):
+            try:
+                _QUERY_EMB[(RETRIEVAL_MODEL, t)] = np.load(fp)[None, :]
+                continue
+            except Exception:
+                pass
+        todo.append(t)
+    if todo:
+        embs = np.asarray(sbert.encode(todo, normalize_embeddings=True, batch_size=32,
+                                       show_progress_bar=False), dtype="float32")
+        for t, e in zip(todo, embs):
+            _QUERY_EMB[(RETRIEVAL_MODEL, t)] = e[None, :]
+            try:
+                fp = _emb_path(t)
+                os.makedirs(os.path.dirname(fp), exist_ok=True)
+                np.save(fp, e)
+            except OSError:
+                pass                                   # cache is best-effort
+    return np.concatenate([_QUERY_EMB[(RETRIEVAL_MODEL, t)] for t in texts], axis=0)
+
 SEVERITY_N = 2   # binary severity prior (high/low) for the D head
-UNSAFE_N = N_C   # binary unsafe prior [P(error), P(violation)] for the (now binary) C head
+UNSAFE_N = N_C   # unsafe prior over the four unsafe-act tiers (C is 4-tier multi-label)
+_UNSAFE_IDX = {t: i for i, t in enumerate(UNSAFE_SUBS)}
 
 # The structural query references only existing properties now, but silence any
 # residual Neo4j notifications so the terminal isn't flooded during retrieval.
@@ -239,29 +289,54 @@ class RAGRetriever:
 
     def _ensure_sbert(self):
         if self._sbert is None:
-            from sentence_transformers import SentenceTransformer
-            self._sbert = SentenceTransformer(RETRIEVAL_MODEL)
+            if self._lofo is not None and getattr(self._lofo, "_sbert", None) is not None:
+                self._sbert = self._lofo._sbert          # same encoder: load it once
+            else:
+                from sentence_transformers import SentenceTransformer
+                self._sbert = SentenceTransformer(RETRIEVAL_MODEL)
         return self._sbert
+
+    def warm(self, texts):
+        """Batch-encode query narratives ahead of the per-record lookups.
+
+        Lookups encode one narrative at a time, which dominates the cost of
+        building a dataset. Encoding a split in one batched pass is an order of
+        magnitude faster; the per-record path then finds its vector in the cache.
+        """
+        todo = sorted({strip_outcome(str(t)) for t in texts} - {""})
+        if not todo or not (self._faiss or self._lofo is not None):
+            return
+        embed_many(self._ensure_sbert(), todo)
+
+    def _embed(self, text: str):
+        key = (RETRIEVAL_MODEL, strip_outcome(str(text)))
+        e = _QUERY_EMB.get(key)
+        if e is None:
+            e = embed_many(self._ensure_sbert(), [key[1]])
+        return e
 
     def close(self):
         if self.driver is not None:
             self.driver.close()
 
     # ---- Mode 1: FAISS semantic ----
-    def _faiss_scores(self, text: str, exclude_id: str = "") -> dict:
+    def _faiss_scores(self, text: str, exclude_id: str = "", k: int | None = None) -> dict:
+        """Source-weighted cosine per candidate. `k` overrides the retriever depth
+        so an exemplar count above TOP_K is actually honoured."""
         if not _clean(text):
             return {}
+        k = int(k or self.k)
         merged = {}
+        if not (self._faiss or (self._lofo is not None and self.ntsb_weight > 0)):
+            return {}
+        emb = self._embed(text)             # one vector, shared by every source
         # ASIAS / ASRS — on-disk FAISS indexes (different corpora; no self-overlap).
         if self._faiss:
-            model = self._ensure_sbert()
-            emb = np.asarray(model.encode([strip_outcome(text)],
-                                          normalize_embeddings=True), dtype="float32")
             for src, weight in (("ASIAS", self.asias_weight), ("ASRS", self.asrs_weight)):
                 if src not in self._faiss or weight <= 0:
                     continue
                 index, ids = self._faiss[src]
-                kk = min(self.k, index.ntotal)
+                kk = min(k, index.ntotal)
                 if kk == 0:
                     continue
                 sims, idx = index.search(emb, kk)
@@ -270,14 +345,23 @@ class RAGRetriever:
                         merged[(ids[i], src)] = float(s) * weight
         # NTSB — in-distribution LOFO source, self-excluding the query's ev_id.
         if self._lofo is not None and self.ntsb_weight > 0:
-            for eid, s in self._lofo.neighbors(text, exclude_id, self.k):
+            # Same encoder, same text: reuse the query vector instead of encoding
+            # the narrative a second time.
+            for eid, s in self._lofo.neighbors(text, exclude_id, k, emb=emb):
                 merged[(eid, "NTSB")] = s * self.ntsb_weight
         # top-k by weighted score
-        return dict(sorted(merged.items(), key=lambda kv: kv[1], reverse=True)[:self.k])
+        return dict(sorted(merged.items(), key=lambda kv: kv[1], reverse=True)[:k])
 
     # ---- Mode 2: deterministic schema-grounded Cypher structural search ----
-    def _cypher_scores(self, record: dict) -> dict:
+    def _cypher_scores(self, record: dict, k: int | None = None,
+                       absolute: bool = False) -> dict:
         """Structural retrieval: score candidates by shared STRUCTURED CONTEXT.
+
+        `absolute=True` (used for exemplars) scores each candidate as the SHARE of
+        the query structured context it matches, instead of min-max normalising
+        within the returned set. Min-max forces the weakest returned candidate to
+        exactly 0 whatever it matched, which is meaningless as a similarity and
+        removes that neighbour from the exemplar vote.
 
         Two sources, merged:
 
@@ -303,10 +387,11 @@ class RAGRetriever:
         # integer count of shared context nodes (observed range 5-9), the
         # in-distribution score is an IDF-weighted sum. Normalizing the merged dict
         # instead put every in-distribution match at the bottom of the ranking.
+        k = int(k or self.k)
         ctx_scores = {}
         if self._lofo is not None and self.ntsb_weight > 0:
             for eid, sc in self._lofo.context_neighbors(
-                    record, str(record.get("ev_id", "")), self.k):
+                    record, str(record.get("ev_id", "")), k):
                 ctx_scores[(eid, "NTSB")] = float(sc)
         # In-distribution matches occupy [0.5, 1.0]; KG matches [0, 0.5). The bands
         # are disjoint ON PURPOSE. Weighting alone did not work: min-max maps each
@@ -316,7 +401,12 @@ class RAGRetriever:
         # slot. A train record with the right label distribution is worth more than
         # any ASIAS match here, so the ordering is made explicit rather than left to
         # near-equal weights.
-        out = {k: 0.5 + 0.5 * v for k, v in _minmax(ctx_scores).items()}
+        if absolute and self._lofo is not None:
+            top = max(self._lofo.context_max(record), 1e-9)
+            norm_ctx = {key: min(v / top, 1.0) for key, v in ctx_scores.items()}
+        else:
+            norm_ctx = _minmax(ctx_scores)
+        out = {key: 0.5 + 0.5 * v for key, v in norm_ctx.items()}
         if self.driver is None:
             return out
         kg_scores = {}
@@ -325,7 +415,7 @@ class RAGRetriever:
             # SDR maintenance bracket is computed (make+year), not a record column.
             params["maintenance_defect_bracket"] = _sdr_bracket(
                 record.get("acft_make", ""), record.get("year", ""))
-            params["k"] = self.k
+            params["k"] = k
             recs, _, _ = self.driver.execute_query(
                 _STRUCTURAL_CYPHER, database_=self.database, **params)
             for r in recs:
@@ -336,9 +426,13 @@ class RAGRetriever:
                 if eid is not None and src is not None and str(src) != "NTSB":
                     kg_scores[(str(eid), str(src))] = float(score or 0.0)
             w = {"ASIAS": self.asias_weight, "ASRS": self.asrs_weight}
-            for k, v in _minmax(kg_scores).items():
-                out[k] = 0.49 * v * w.get(k[1], 0.33) / max(self.asias_weight,
-                                                            self.asrs_weight, 1e-9)
+            # The Cypher score counts matched context nodes: at most 2 env + 2
+            # personnel + 4 organizational + 1 technological.
+            norm_kg = ({key: min(v / 9.0, 1.0) for key, v in kg_scores.items()}
+                       if absolute else _minmax(kg_scores))
+            for key, v in norm_kg.items():
+                out[key] = 0.49 * v * w.get(key[1], 0.33) / max(self.asias_weight,
+                                                                self.asrs_weight, 1e-9)
             return out
         except Exception as e:
             logging.warning("RAG: structural Cypher failed (%s) — in-distribution "
@@ -354,27 +448,81 @@ class RAGRetriever:
         combined = {k: 0.5 * f.get(k, 0.0) + 0.5 * c.get(k, 0.0) for k in keys}
         return dict(sorted(combined.items(), key=lambda kv: kv[1], reverse=True)[:self.k])
 
-    def ranked_neighbors(self, record: dict, k: int | None = None) -> list:
+    def _combine_abs(self, faiss_scores: dict, cypher_scores: dict) -> dict:
+        """Combine on ABSOLUTE scales, for exemplars. `_combine` is left untouched
+        because the legacy prior conditions were produced with it.
+
+        Semantic scores are source-weighted cosines; dividing by the largest source
+        weight puts them back on the cosine scale. Structural scores are already
+        in [0, 1]. One strategy -> that score as is; hybrid -> their mean, with a
+        candidate missing from one side scoring 0 there.
+        """
+        wmax = max(self.asias_weight, self.asrs_weight, self.ntsb_weight, 1e-9)
+        f = {key: max(v / wmax, 0.0) for key, v in faiss_scores.items()}
+        c = dict(cypher_scores)
+        if self.strategy == "faiss":
+            return f
+        if self.strategy == "cypher":
+            return c
+        return {key: 0.5 * f.get(key, 0.0) + 0.5 * c.get(key, 0.0) for key in set(f) | set(c)}
+
+    def _complete_hybrid(self, record, text, faiss_scores, cypher_scores):
+        """Give every in-distribution candidate BOTH of its scores (in place).
+
+        The two strategies return different candidate sets. A candidate found by
+        only one used to score 0 on the other side, so a pure context match
+        (structural up to 1.0, halved to 0.5) outranked any semantic match (cosine
+        ~0.75, halved to ~0.37): the hybrid top-k filled with context matches, which
+        carry almost no label signal, and hybrid scored well below semantic alone.
+        Both scores are cheap to compute for a train record, so they are filled in
+        and the ranking reflects both. KG candidates are left as they are: their
+        missing side would need a Cypher round-trip per candidate.
+        """
+        if self._lofo is None or self.ntsb_weight <= 0:
+            return
+        need_f = [e for (e, src) in cypher_scores
+                  if src == "NTSB" and (e, src) not in faiss_scores]
+        if need_f and _clean(text):
+            for e, sim in self._lofo.similarity(self._embed(text), need_f).items():
+                faiss_scores[(e, "NTSB")] = sim * self.ntsb_weight
+        need_c = [e for (e, src) in faiss_scores
+                  if src == "NTSB" and (e, src) not in cypher_scores]
+        if need_c:
+            top = max(self._lofo.context_max(record), 1e-9)
+            for e, sc in self._lofo.context_scores(record, need_c).items():
+                cypher_scores[(e, "NTSB")] = 0.5 + 0.5 * min(sc / top, 1.0)
+
+    def ranked_neighbors(self, record: dict, k: int | None = None,
+                         fetch: int | None = None) -> list:
         """Top-k neighbours as [((event_id, source), score), ...], highest first.
 
-        Same scoring path `retrieve()` uses — semantic FAISS and/or structural
-        Cypher per `self.strategy`, min-max normalized and combined 50/50 — but
-        stopped BEFORE the per-neighbour labels are pooled into priors. This is
-        what few-shot needs: the neighbours themselves, not their average.
+        Same candidate sources `retrieve()` uses — semantic FAISS and/or structural
+        context per `self.strategy` — but scored on ABSOLUTE scales (`_combine_abs`)
+        and stopped BEFORE the per-neighbour labels are pooled into priors. This is
+        what few-shot needs: the neighbours themselves, with a similarity that
+        means the same thing from one query to the next.
+
+        `fetch` returns more candidates than `k`; the caller keeps the first `k`
+        that have an exemplar row. `k` alone used to be capped at the retriever
+        TOP_K, so asking for 15 exemplars silently returned 5.
 
         Returns [] on any failure, which the caller must treat as "no exemplars"
         (a zero-filled, masked-out block) rather than as an error.
         """
         try:
+            k = int(k or self.k)
+            depth = int(fetch or k)                        # candidates per strategy
             text = record.get("combined_text", "")
             exclude_id = record.get("ev_id", "")          # LOFO self-exclusion
-            faiss_scores = (self._faiss_scores(text, exclude_id)
+            faiss_scores = (self._faiss_scores(text, exclude_id, k=depth)
                             if self.strategy in ("hybrid", "faiss") else {})
-            cypher_scores = (self._cypher_scores(record)
+            cypher_scores = (self._cypher_scores(record, k=depth, absolute=True)
                              if self.strategy in ("hybrid", "cypher") else {})
-            combined = self._combine(faiss_scores, cypher_scores)
+            if self.strategy == "hybrid":
+                self._complete_hybrid(record, text, faiss_scores, cypher_scores)
+            combined = self._combine_abs(faiss_scores, cypher_scores)
             items = sorted(combined.items(), key=lambda kv: kv[1], reverse=True)
-            return items[:(k or self.k)]
+            return items[:depth]
         except Exception as e:
             logging.warning("RAG: ranked_neighbors failed (%s) — no exemplars.", e)
             return []
@@ -447,14 +595,6 @@ class RAGRetriever:
         except Exception:
             return []
 
-    def _fetch_violation(self, factors: list):
-        """C is binary (violation vs error). From an event's HFACS tiers: 1 if it
-        has an unsafe_violation, 0 if it has tiers but no violation, None if no
-        factor info (so it doesn't bias the prior)."""
-        if not factors:
-            return None
-        return 1 if UNSAFE_VIOLATION_TIER in factors else 0
-
     def _fetch_severity(self, event_id: str, source: str):
         """Binarized severity outcome stored on the EventNode; None if absent
         (e.g. ASRS, which has no injury data) so it doesn't bias the prior."""
@@ -501,9 +641,10 @@ class RAGRetriever:
                         g = VALUE_TO_GROUP.get(value)
                         if g is not None:
                             acc[g[0]][g[1]] += weight
-                    v = self._fetch_violation(factors)            # violation prior -> C
-                    if v is not None:
-                        uns_acc[v] += weight
+                    for value in factors:                         # unsafe-tier prior -> C
+                        ui = _UNSAFE_IDX.get(value)
+                        if ui is not None:
+                            uns_acc[ui] += weight
                 s = self._fetch_severity(eid, src)                # structured D prior (kept)
                 if s is not None and 0 <= s < SEVERITY_N:
                     sev_acc[s] += weight
@@ -573,6 +714,7 @@ class LOFORetriever:
                        source_df["combined_text"].astype(str).fillna("").tolist()]
         self._sbert = None
         self._index = None
+        self._emb = None                                    # [n, dim] pool vectors
         self._build_index()
         self._build_context_table(source_df)
 
@@ -591,6 +733,37 @@ class LOFORetriever:
             for f, v in row.items():
                 counts[(f, v)] = counts.get((f, v), 0) + 1
         self._idf = {k: float(np.log(n / c)) for k, c in counts.items()}
+
+    def context_max(self, record: dict) -> float:
+        """IDF mass a candidate would score by matching EVERY usable context field
+        of `record` — the denominator that turns a context score into a share."""
+        q = {p: str(record.get(p, "") or "") for p in CYPHER_PARAMS}
+        return float(sum(self._idf.get((f, v), 0.0) for f, v in q.items()
+                         if v and v.lower() not in ("", "nan", "unknown")))
+
+    def context_scores(self, record: dict, ev_ids) -> dict:
+        """IDF-weighted context agreement with `record` for the given train ids."""
+        q = {p: str(record.get(p, "") or "") for p in CYPHER_PARAMS}
+        q = {f: v for f, v in q.items() if v and v.lower() not in ("", "nan", "unknown")}
+        out = {}
+        for e in ev_ids:
+            i = self._pos.get(str(e))
+            if i is not None:
+                row = self._ctx[i]
+                out[str(e)] = float(sum(self._idf.get((f, v), 0.0)
+                                        for f, v in q.items() if row.get(f) == v))
+        return out
+
+    def similarity(self, emb, ev_ids) -> dict:
+        """Cosine between a query vector and the given train ids."""
+        if self._emb is None or emb is None:
+            return {}
+        out = {}
+        for e in ev_ids:
+            i = self._pos.get(str(e))
+            if i is not None:
+                out[str(e)] = float(self._emb[i] @ emb[0])
+        return out
 
     def context_neighbors(self, record: dict, exclude_id: str, k: int) -> list:
         """Top-k (ev_id, score) by IDF-weighted agreement on STRUCTURED context.
@@ -616,12 +789,14 @@ class LOFORetriever:
         return out[:k]
 
     # ---- source API (used when LOFO is the NTSB source inside RAGRetriever) ----
-    def neighbors(self, text: str, exclude_id: str, k: int) -> list:
-        """Top-k (ev_id, similarity) from the train split, self-excluding exclude_id."""
+    def neighbors(self, text: str, exclude_id: str, k: int, emb=None) -> list:
+        """Top-k (ev_id, similarity) from the train split, self-excluding exclude_id.
+        `emb` is an already-computed query vector from the same encoder."""
         if self._index is None or not _clean(text):
             return []
-        emb = np.asarray(self._sbert.encode([strip_outcome(text)],
-                                            normalize_embeddings=True), dtype="float32")
+        if emb is None:
+            emb = np.asarray(self._sbert.encode([strip_outcome(text)],
+                                                normalize_embeddings=True), dtype="float32")
         sims, idx = self._index.search(emb, min(k + 1, len(self.ids)))
         out = []
         for s, i in zip(sims[0], idx[0]):
@@ -647,8 +822,10 @@ class LOFORetriever:
             import faiss
             from sentence_transformers import SentenceTransformer
             self._sbert = SentenceTransformer(RETRIEVAL_MODEL)
-            emb = np.asarray(self._sbert.encode(self._texts, normalize_embeddings=True),
-                             dtype="float32")
+            # Cached per text, so the pool vectors double as the query vectors of
+            # the same train records when their own exemplars are looked up.
+            emb = np.ascontiguousarray(embed_many(self._sbert, self._texts))
+            self._emb = emb
             self._index = faiss.IndexFlatIP(emb.shape[1])
             self._index.add(emb)
             logging.info("LOFO: indexed %d in-distribution train records.", len(self.ids))
@@ -681,8 +858,9 @@ class LOFORetriever:
                     for g in self._pre[i]:                     # precond groups -> B
                         if g in self._gidx:
                             pre[self._gidx[g]] += w
-                    v = 1 if UNSAFE_VIOLATION_TIER in self._uns[i] else 0
-                    uns[v] += w                                # violation outcome -> C
+                    for t in self._uns[i]:                     # unsafe tiers -> C
+                        if t in _UNSAFE_IDX:
+                            uns[_UNSAFE_IDX[t]] += w
                 if 0 <= self._sev[i] < SEVERITY_N:
                     sev[self._sev[i]] += w                     # severity outcome -> D
                 used += 1

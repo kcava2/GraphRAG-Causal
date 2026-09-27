@@ -111,16 +111,24 @@ PRECOND_GROUP_INDEX = {t: i for i, tiers in enumerate(PRECOND_GROUPS.values()) f
 ORG_SUBS = ORG_TIERS                # y_O space (3; org not predicted)
 SUP_SUBS = SUP_TIERS                # y_A space (1; sup not predicted)
 PRECOND_SUBS = list(PRECOND_GROUPS) # y_B space (3 precondition GROUPS, multi-label)
-UNSAFE_SUBS = UNSAFE_TIERS          # retained for imports; C is binary now (see N_C)
+UNSAFE_SUBS = UNSAFE_TIERS          # y_C space (4 unsafe-act TIERS, multi-label)
 
-# C (Unsafe Acts) is a BINARY SINGLE-LABEL head — violation vs error-only — not a
-# 4-way multi-label. The 4 unsafe tiers are collapsed: class 1 if an
-# unsafe_violation was extracted, else class 0 (errors only / none). This trades
-# granularity (the rare perception tier sat at ~5% prevalence and pinned C at
-# chance) for a learnable target. Full 4-tier multi-label C is future work.
+# C (Unsafe Acts) is a FOUR-TIER MULTI-LABEL head: skill / decision / perception /
+# violation, one sigmoid each. It was collapsed to a binary violation-vs-error
+# target while unsafe_perception sat at ~6% and pinned a four-way head at chance.
+# On the current extraction that no longer holds (decision 71%, skill 31%,
+# perception 14%, violation 9%), and the binary target was the worst of the four:
+# 15 positives in the test split and a label two extraction runs agree on at
+# kappa 0.10. Multi-label rather than single-label because 23% of records carry
+# two or more unsafe-act tiers; a softmax would have to throw one away.
 UNSAFE_VIOLATION_TIER = "unsafe_violation"
 N_O, N_A, N_B = len(ORG_SUBS), len(SUP_SUBS), len(PRECOND_SUBS)
-N_C = 2                             # C classes: 0 = error/none, 1 = violation
+N_C = len(UNSAFE_SUBS)              # 4 unsafe-act tiers, multi-label
+
+# Strict, consensus re-labelling of the violation tier (data/adjudicate_violation.py).
+# Applied as an override on top of hfacs_results.csv when the file exists, so the
+# committed extraction stays intact. HFACS_VIOLATION_OVERRIDE=0 switches it off.
+VIOLATION_OVERRIDE = os.path.join(_HERE, "violation_adjudication.csv")
 
 # step_ctx = organizational/supervisory CONTEXT, sourced from structured economic
 # data (no text mining), QoQ-only (no absolute levels). invest_type is EXCLUDED:
@@ -142,6 +150,43 @@ STEP_B_BASE = 5                # visual, light, tod, person, pilot_hours
 
 def _multihot(active: set, vocab: list) -> np.ndarray:
     return np.array([1.0 if s in active else 0.0 for s in vocab], dtype="float32")
+
+
+def _apply_violation_override(ev_ids, unsafe_sets, path: str = None, verbose: bool = True):
+    """Replace the committed `unsafe_violation` label with the strict adjudicated one.
+
+    The committed extraction hands out `unsafe_violation` for almost any
+    non-compliance, including by passengers and by operators as organisations;
+    `adjudicate_violation.py` re-decides that single tier under the HFACS
+    definition (operational role + identifiable rule + knowing deviation) by
+    majority vote. When a violation is overturned and that leaves the record with
+    no unsafe act at all, the adjudicator's error tier is used instead — HFACS
+    files an unintentional rule breach as an error, not as nothing.
+
+    No-op when the file is absent or HFACS_VIOLATION_OVERRIDE=0.
+    """
+    path = path or VIOLATION_OVERRIDE
+    if os.environ.get("HFACS_VIOLATION_OVERRIDE", "1") == "0" or not os.path.exists(path):
+        return list(unsafe_sets)
+    adj = pd.read_csv(path, dtype=str).fillna("")
+    final = {e: int(float(f or 0)) for e, f in zip(adj["ev_id"], adj["final"])}
+    reclass = dict(zip(adj["ev_id"], adj.get("reclass", pd.Series([""] * len(adj)))))
+    out, removed, added, refiled = [], 0, 0, 0
+    for ev, s in zip(ev_ids.astype(str), unsafe_sets):
+        s = set(s)
+        if ev in final:
+            had = UNSAFE_VIOLATION_TIER in s
+            if final[ev] and not had:
+                s.add(UNSAFE_VIOLATION_TIER); added += 1
+            elif had and not final[ev]:
+                s.discard(UNSAFE_VIOLATION_TIER); removed += 1
+                if not s and reclass.get(ev) in UNSAFE_TIERS:
+                    s.add(reclass[ev]); refiled += 1
+        out.append(s)
+    if verbose:
+        print(f"  Violation override: {removed} removed, {added} added, {refiled} "
+              f"re-filed as an error tier ({os.path.basename(path)}).")
+    return out
 
 
 def load_and_join(filepath: str = NTSB_CLEAN,
@@ -178,7 +223,7 @@ def load_and_join(filepath: str = NTSB_CLEAN,
     df["_org"] = [s[0] for s in sets]
     df["_sup"] = [s[1] for s in sets]
     df["_pre"] = [s[2] for s in sets]
-    df["_uns"] = [s[3] for s in sets]
+    df["_uns"] = _apply_violation_override(df["ev_id"], [s[3] for s in sets])
 
     sev = pd.to_numeric(df["severity_class"], errors="coerce")
     df = df[sev.notna()].reset_index(drop=True)
@@ -298,8 +343,59 @@ def causal_roles(edges) -> np.ndarray:
     return v
 
 
-# [base (5) | y_B (3) | y_C one-hot (2) | y_D one-hot (2) | causal roles (20) | similarity (1)]
-FEWSHOT_DIM = STEP_B_BASE + N_B + N_C + 2 + CAUSAL_DIM + 1
+# Exemplar row layout — ONE definition, read by the sources here and by the encoder:
+#
+#   [ base (5) | y_B (3) | y_C (4) | y_D one-hot (2) | causal roles (20)
+#     | has_factor_labels (1) | has_severity (1) | similarity (1) ]
+#
+# The two `has_*` flags say whether a label block is KNOWN for this neighbour. They
+# exist because "no label" and "label is zero" used to be the same bytes: an ASRS
+# event with no injury data, or a KG event whose HFACS factors were mined by a
+# different prompt, showed up as an all-zero block and was averaged into the
+# neighbour vote as a confident negative. With the flag the vote for a block is
+# taken over the neighbours that actually carry it.
+#
+# `similarity` is the retrieval score on an ABSOLUTE scale (cosine, or the matched
+# share of structured context). It used to be min-max normalised across the k
+# neighbours, which forced the weakest one to exactly 0.0 — silently dropping it
+# from the vote — and turned the column into a rank index rather than a similarity.
+FS_BASE = slice(0, STEP_B_BASE)
+FS_B = slice(FS_BASE.stop, FS_BASE.stop + N_B)
+FS_C = slice(FS_B.stop, FS_B.stop + N_C)
+FS_D = slice(FS_C.stop, FS_C.stop + 2)
+FS_CAUSAL = slice(FS_D.stop, FS_D.stop + CAUSAL_DIM)
+FS_HAS_BC = FS_CAUSAL.stop
+FS_HAS_D = FS_HAS_BC + 1
+FS_SIM = FS_HAS_D + 1
+FEWSHOT_DIM = FS_SIM + 1
+
+
+def _exemplar_matrix(df: pd.DataFrame, encoders: "NTSBEncoders",
+                     raw_mode: bool = False) -> np.ndarray:
+    """[n, FEWSHOT_DIM - 1] exemplar rows for NTSB records (similarity is per query).
+
+    Shared by both exemplar sources so train-split rows are built identically.
+    `raw_mode` (condition C5) removes the LLM-mined B/C labels and marks them
+    unknown, leaving structured severity as the only label carried.
+    """
+    df = df.reset_index(drop=True)
+    mat = np.zeros((len(df), FEWSHOT_DIM - 1), dtype="float32")
+    mat[:, FS_BASE] = encode_step_b_base(df, encoders)
+    mat[:, FS_B] = np.stack([_multihot(s, PRECOND_SUBS) for s in df["_pre"]])
+    mat[:, FS_C] = np.stack([_multihot(s, UNSAFE_SUBS) for s in df["_uns"]])
+    y_D = pd.to_numeric(df["severity_class"], errors="coerce").fillna(0).astype(int).to_numpy()
+    mat[:, FS_D] = np.eye(2, dtype="float32")[np.clip(y_D, 0, 1)]
+    mat[:, FS_CAUSAL] = _train_causal_roles(df)
+    mat[:, FS_HAS_BC] = 1.0
+    mat[:, FS_HAS_D] = 1.0
+    if raw_mode:
+        mat[:, FS_B] = 0.0
+        mat[:, FS_C] = 0.0
+        # The causal roles are LLM-mined too, and a role vector over the ten tiers
+        # says which tiers are present. Leaving it in made C5 a partial ablation.
+        mat[:, FS_CAUSAL] = 0.0
+        mat[:, FS_HAS_BC] = 0.0
+    return mat
 
 
 class FewShotSource:
@@ -326,21 +422,8 @@ class FewShotSource:
         self._texts = [strip_outcome(t) for t in           # retrieval text only
                        df["combined_text"].astype(str).fillna("").tolist()]
 
-        base = encode_step_b_base(df, encoders)
-        y_B = np.stack([_multihot(s, PRECOND_SUBS) for s in df["_pre"]]).astype("float32")
-        y_C = np.array([1 if UNSAFE_VIOLATION_TIER in s else 0 for s in df["_uns"]])
-        y_D = pd.to_numeric(df["severity_class"], errors="coerce").fillna(0).astype(int).to_numpy()
-
-        onehot = lambda v, n: np.eye(n, dtype="float32")[np.clip(v, 0, n - 1)]
-        # Columns are laid out to match FEWSHOT_DIM; similarity is filled per query.
-        chains = _train_causal_roles(df)          # extracted causal chain per record
-        self.matrix = np.concatenate(
-            [base, y_B, onehot(y_C, N_C), onehot(y_D, 2), chains],
-            axis=1).astype("float32")
-        if self.matrix.shape[1] != FEWSHOT_DIM - 1:
-            raise ValueError(f"exemplar width {self.matrix.shape[1]} != "
-                             f"{FEWSHOT_DIM - 1}; FEWSHOT_DIM and the column "
-                             f"blocks have drifted apart")
+        # Columns follow the FS_* layout; similarity is filled per query.
+        self.matrix = _exemplar_matrix(df, encoders)
 
         self._sbert = None
         self._index = None
@@ -435,9 +518,17 @@ class GraphFewShotSource:
     LLM-mined content removed (condition C5).
     """
 
-    def __init__(self, retriever, raw_mode: bool = False):
+    def __init__(self, retriever, raw_mode: bool = False,
+                 kg_factor_labels: bool = False):
         self.retriever = retriever
         self.raw_mode = raw_mode
+        # KG events (ASIAS/ASRS) had their HFACS factors mined by kg_builder under
+        # a different prompt, and their base rates do not match the NTSB targets
+        # (see attach_encoders). By default those B/C labels are therefore marked
+        # UNKNOWN: the neighbour still contributes its context, causal roles,
+        # severity and similarity, but does not vote on B or C. Pass True to let
+        # them vote (the behaviour before this flag existed).
+        self.kg_factor_labels = kg_factor_labels
         self._rows = {}
 
     def attach_encoders(self, encoders: "NTSBEncoders", source_df: pd.DataFrame = None):
@@ -472,10 +563,10 @@ class GraphFewShotSource:
                 self.retriever.set_source_df(source_df)        # activates LOFO
             n_train = self._add_train_rows(source_df, encoders)
 
-        sev_slice = slice(STEP_B_BASE + N_B + N_C, STEP_B_BASE + N_B + N_C + 2)
-        n_sev = sum(1 for r in self._rows.values() if r[sev_slice].any())
+        n_sev = sum(1 for r in self._rows.values() if r[FS_HAS_D] > 0)
+        n_lab = sum(1 for r in self._rows.values() if r[FS_HAS_BC] > 0)
         print(f"  Graph few-shot source: {n_kg} KG events + {n_train} in-distribution "
-              f"train records ({n_sev} with severity)"
+              f"train records ({n_sev} with severity, {n_lab} voting on B/C)"
               f"{' [raw mode: no factor labels]' if self.raw_mode else ''}.")
 
     def _add_train_rows(self, df: pd.DataFrame, e: "NTSBEncoders") -> int:
@@ -486,19 +577,9 @@ class GraphFewShotSource:
         disjoint `ntsb_kg_subset`, so there is no id collision.
         """
         df = df.reset_index(drop=True)
-        base = encode_step_b_base(df, e)
-        y_B = np.stack([_multihot(s, PRECOND_SUBS) for s in df["_pre"]]).astype("float32")
-        y_C = np.array([1 if UNSAFE_VIOLATION_TIER in s else 0 for s in df["_uns"]])
-        y_D = pd.to_numeric(df["severity_class"], errors="coerce").fillna(0).astype(int).to_numpy()
-        onehot = lambda v, n: np.eye(n, dtype="float32")[np.clip(v, 0, n - 1)]
-        # Causal chains for train records come from the extractor's own
-        # relationships_json (task 2), the same LLM-extracted edges the KG stores
-        # with evidence — so both exemplar sources encode chains identically.
-        chains = _train_causal_roles(df)
-        mat = np.concatenate([base, y_B, onehot(y_C, N_C), onehot(y_D, 2), chains],
-                             axis=1).astype("float32")
-        if self.raw_mode:                       # C5: strip the LLM-mined labels
-            mat[:, STEP_B_BASE:STEP_B_BASE + N_B + N_C] = 0.0
+        # Same builder as FewShotSource, so both sources encode a train record
+        # identically. raw_mode (C5) strips every LLM-mined column.
+        mat = _exemplar_matrix(df, e, raw_mode=self.raw_mode)
         for i, ev in enumerate(df["ev_id"].astype(str)):
             self._rows[(ev, "NTSB")] = mat[i]
         return len(df)
@@ -516,28 +597,33 @@ class GraphFewShotSource:
         row[4] = one(e.enc_pilot_hours, ctx.get("pilot_hours_bracket", "Unknown"))
 
         tiers = a.get("tiers", []) or []
-        if not self.raw_mode:                                  # LLM-mined labels
-            for t in tiers:
-                gi = PRECOND_GROUP_INDEX.get(t)
-                if gi is not None:
-                    row[STEP_B_BASE + gi] = 1.0
-            if tiers:                                          # C only when known
-                v = 1 if UNSAFE_VIOLATION_TIER in tiers else 0
-                row[STEP_B_BASE + N_B + v] = 1.0
-
-        roles = causal_roles(a.get("causal"))                  # extracted chain
-        row[STEP_B_BASE + N_B + N_C + 2:
-            STEP_B_BASE + N_B + N_C + 2 + CAUSAL_DIM] = roles
+        if not self.raw_mode:                                  # LLM-mined content
+            if tiers and self.kg_factor_labels:
+                for t in tiers:
+                    gi = PRECOND_GROUP_INDEX.get(t)
+                    if gi is not None:
+                        row[FS_B.start + gi] = 1.0
+                    if t in UNSAFE_SUBS:
+                        row[FS_C.start + UNSAFE_SUBS.index(t)] = 1.0
+                row[FS_HAS_BC] = 1.0                           # labels known
+            row[FS_CAUSAL] = causal_roles(a.get("causal"))     # extracted chain
 
         sev = a.get("severity")                                # structured outcome
         if sev is not None:
             try:
                 b = binarize_severity(sev)
                 if b is not None and 0 <= int(b) < 2:
-                    row[STEP_B_BASE + N_B + N_C + int(b)] = 1.0
+                    row[FS_D.start + int(b)] = 1.0
+                    row[FS_HAS_D] = 1.0
             except Exception:
-                pass                                           # all-zeros = unknown
+                pass                                           # flag stays 0 = unknown
         return row
+
+    def warm(self, texts):
+        """Batch-encode query narratives before the per-record lookups."""
+        if self.retriever is not None and hasattr(self.retriever, "warm") \
+                and self.retriever.strategy in ("faiss", "hybrid"):
+            self.retriever.warm(texts)
 
     def lookup(self, record: dict, k: int):
         """-> (exemplars [k, FEWSHOT_DIM], mask [k]) from the graph."""
@@ -546,7 +632,10 @@ class GraphFewShotSource:
         if self.retriever is None:
             return out, mask
         used = 0
-        for key, score in self.retriever.ranked_neighbors(record, k=k):
+        # Ask for more candidates than slots. A neighbour with no exemplar row (a KG
+        # event when Neo4j is down, say) used to consume a slot and leave the record
+        # short of exemplars without any message.
+        for key, score in self.retriever.ranked_neighbors(record, k=k, fetch=3 * k):
             row = self._rows.get(key)
             if row is None:
                 continue
@@ -580,7 +669,7 @@ class NTSBSequenceDataset(Dataset):
         step_b   : [visual, light, time_of_day, person, pilot_hours]
                    (+ precond_prior | unsafe_prior | severity_prior  when RAG)
         y_B      : multi-hot float vector (Preconditions, BCE target)
-        y_C      : binary class index (long; 1 = violation, 0 = error/none)
+        y_C      : multi-hot float vector over the 4 unsafe-act tiers (BCE target)
         y_D      : binary severity class index (long; high/low) — NTSB only; ASIAS
                    rows carry -100 (ignore_index) so they don't train/eval D
         fewshot  : [k, FEWSHOT_DIM] retrieved labelled exemplars, empty when
@@ -598,10 +687,9 @@ class NTSBSequenceDataset(Dataset):
         # upper HFACS tier is the structured economic context (step_ctx) below.
         self.y_B = torch.tensor(
             np.stack([_multihot(s, PRECOND_SUBS) for s in df["_pre"]]), dtype=torch.float32)
-        # C is a binary single-label class index: 1 if a violation was extracted.
+        # C is a multi-hot float vector over the four unsafe-act tiers (BCE target).
         self.y_C = torch.tensor(
-            np.array([1 if UNSAFE_VIOLATION_TIER in s else 0 for s in df["_uns"]],
-                     dtype="int64"), dtype=torch.long)
+            np.stack([_multihot(s, UNSAFE_SUBS) for s in df["_uns"]]), dtype=torch.float32)
 
         # D (severity) is trained/evaluated on NTSB rows ONLY. ASIAS severity is
         # gravity-based, ~all low, and trivially separable from NTSB (sky='UNK',
@@ -659,6 +747,8 @@ class NTSBSequenceDataset(Dataset):
             # (context brackets, make/year) as well as the narrative and ev_id.
             fs_recs = df[[c for c in self._RETRIEVE_COLS
                           if c in df.columns]].astype(str).to_dict("records")
+            if hasattr(fewshot_source, "warm"):          # batch-encode the queries once
+                fewshot_source.warm([r.get("combined_text", "") for r in fs_recs])
             for i, rec in enumerate(fs_recs):
                 ex[i], mk[i] = fewshot_source.lookup(rec, fewshot_k)
             n_with = int((mk.sum(1) > 0).sum())
@@ -718,6 +808,65 @@ class NTSBSequenceDataset(Dataset):
         return (self.step_ctx[idx], self.step_b[idx],
                 self.y_B[idx], self.y_C[idx], self.y_D[idx],
                 self.fewshot[idx], self.fewshot_mask[idx])
+
+
+# ---------------------------------------------------------------------------
+# Retrieval gate — does the exemplar block carry anything, before any training?
+# ---------------------------------------------------------------------------
+
+def exemplar_vote(fewshot: np.ndarray, mask: np.ndarray, tau: float = 0.1) -> dict:
+    """Similarity-weighted neighbour vote per head, straight from an exemplar block.
+
+    Mirrors `FewShotEncoder`'s vote: softmax(similarity / tau) over the real
+    neighbours, and each label block averaged only over neighbours whose labels
+    are KNOWN (the has_* flags). Returns {'B': [n,N_B], 'C': [n,N_C], 'D': [n]}.
+    """
+    sim = fewshot[..., FS_SIM]
+    logit = np.where(mask > 0, sim / tau, -1e9)
+    w = np.exp(logit - logit.max(1, keepdims=True)) * (mask > 0)
+    w = w / np.clip(w.sum(1, keepdims=True), 1e-9, None)
+
+    def block(sl, flag):
+        wf = w * fewshot[..., flag]
+        return (fewshot[..., sl] * wf[..., None]).sum(1) / np.clip(
+            wf.sum(1, keepdims=True), 1e-9, None)
+    d = block(FS_D, FS_HAS_D)
+    return {"B": block(FS_B, FS_HAS_BC), "C": block(FS_C, FS_HAS_BC), "D": d[:, 1]}
+
+
+def retrieval_gate(dataset: "NTSBSequenceDataset", name: str = "val") -> dict:
+    """Print and return the exemplar vote's AUC per label on `dataset`.
+
+    This is the honest measure of whether retrieval can help a head at all. The
+    vote is a fixed function of the exemplar block — no weights, no training — so
+    if it cannot rank a label, no architecture reading the same block will. It
+    is also where a silent retrieval failure shows up: coverage can read 100%
+    while every neighbour is uninformative.
+    """
+    from sklearn.metrics import roc_auc_score
+    if dataset.fewshot.shape[1] == 0:
+        return {}
+    v = exemplar_vote(dataset.fewshot.numpy(), dataset.fewshot_mask.numpy())
+    out = {}
+
+    def auc(y, p):
+        return float(roc_auc_score(y, p)) if 0 < y.sum() < len(y) else float("nan")
+    for j, g in enumerate(PRECOND_SUBS):
+        out[f"B:{g.replace('precond_', '')}"] = auc(dataset.y_B[:, j].numpy(), v["B"][:, j])
+    for j, t in enumerate(UNSAFE_SUBS):
+        out[f"C:{t.replace('unsafe_', '')}"] = auc(dataset.y_C[:, j].numpy(), v["C"][:, j])
+    yd = dataset.y_D.numpy()
+    m = yd != -100
+    out["D:severity"] = auc(yd[m], v["D"][m])
+    sim = dataset.fewshot[..., FS_SIM].numpy()
+    msk = dataset.fewshot_mask.numpy() > 0
+    out["_mean_similarity"] = float(sim[msk].mean()) if msk.any() else float("nan")
+    out["_mean_exemplars"] = float(msk.sum(1).mean())
+    print(f"  Retrieval gate [{name}] vote AUC: "
+          + "  ".join(f"{k} {a:.3f}" for k, a in out.items() if not k.startswith("_"))
+          + f"  | mean similarity {out['_mean_similarity']:.3f}, "
+            f"exemplars/record {out['_mean_exemplars']:.1f}")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -837,10 +986,10 @@ def main():
         return
 
     tr, va, te, enc = get_dataloaders(filepath=args.input, build_faiss=False)
-    s_ctx, s_b, yB, yC, yD = next(iter(tr))
+    s_ctx, s_b, yB, yC, yD, _fs, _fsm = next(iter(tr))
     print("step_ctx:", s_ctx.shape, "step_b:", s_b.shape)
     print("y_B/y_C/y_D:", yB.shape, yC.shape, yD.shape)
-    print("n_B/n_C(classes)/n_severity:", enc.n_B, enc.n_C, enc.n_severity)
+    print("n_B/n_C(tiers)/n_severity:", enc.n_B, enc.n_C, enc.n_severity)
 
 
 if __name__ == "__main__":
