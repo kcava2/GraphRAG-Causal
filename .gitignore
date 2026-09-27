@@ -6,3 +6,12 @@ data/rawdata/
 
 # Claude Code local settings — contains the Neo4j password, must not be committed
 .claude/
+# Retrieval embedding cache (pure function of encoder + text; safe to delete)
+data/.emb_cache/
+# Work-in-progress violation adjudication; only the completed file is applied
+data/violation_adjudication.partial.csv
+data/build_query_views.log
+data/adjudicate_violation.log
+
+# Ignore the JetBrains IDE folder
+.idea/
