@@ -9,17 +9,43 @@ newer digest, and never installs anything.
 
 Stages (in order):
 
-    1. pilot extraction          data/hfacs_extractor.py --limit 150      ~20 min
+    1. pilot extraction          data/hfacs_extractor.py --limit 150      ~15 min
     2. comparison vs current     data/compare_extractions.py             seconds
-    3. full extraction           data/hfacs_extractor.py --split all      ~4 h
-    4. violation adjudication    data/adjudicate_violation.py             ~2 h
+    3. full extraction           data/hfacs_extractor.py --split all      ~1.5 h
+    4. violation adjudication    data/adjudicate_violation.py             ~40 min
     5. clear the Neo4j graph     MATCH (n) DETACH DELETE n               seconds
     6. preflight KG build        data/kg_builder.py --limit 5 --dry-run   ~1 min
-    7. full KG build             data/kg_builder.py --source all          ~8 h
-    8. FAISS-only index build    data/kg_builder.py --faiss-only          minutes
+    7. KG build, graph only      data/kg_builder.py --source all          ~1.5 h
+                                 --skip-faiss
+    8. FAISS indexes, then the   data/kg_builder.py --faiss-only          minutes
+       NTSB training events      data/kg_builder.py --ingest-ntsb-train
+       into the graph
     9. Neo4j dump                neo4j-admin database dump                minutes
 
-Total: roughly 14 hours of compute, almost all of it in stages 3, 4 and 7.
+Total: roughly 4 hours on the RTX 5090 with qwen3.8:27b (timings observed on
+2026-09-27), almost all of it in stages 3, 4 and 7.
+
+Stage 8 also writes the NTSB TRAINING events into the graph (no model calls: they
+are written from the labels stages 3 and 4 produced). Retrieval in the experiment
+reads the graph and nothing else, and those events are where almost all of the
+graph's outcome information is. Validation and test events are never written. This
+has to follow stage 5, which empties the graph, and stages 3-4, which set the labels;
+after a labels-only run (--stop-after 4) the closing message says to run it by hand.
+
+Load on the machine. Stages 1-7 are GPU work: the model runs in Ollama and the CPU
+is mostly idle. The one CPU-heavy step is embedding the KG narratives for the FAISS
+indexes, and three things keep it as light as possible:
+
+  * It happens ONCE. Stage 7 used to build the three indexes at the end of the graph
+    build and stage 8 then rebuilt the same three, doubling the heaviest stretch of
+    the run. Stage 7 now passes --skip-faiss; stage 8 builds them, with the
+    alignment check that proves they match the graph.
+  * The model is unloaded as soon as the last LLM stage in the run finishes
+    (`ollama stop`). Left alone, Ollama keeps it for five minutes and then unloads
+    and re-probes the GPU, which landed in the middle of the embedding.
+  * Stage 8 runs with a capped CPU thread count (EMBED_CPU_THREADS, default 6;
+    override with RUN_ALL_EMBED_THREADS). With a CUDA build of PyTorch the
+    embedding itself runs on the GPU and the cap only bounds the tokenizer.
 
 Stage numbering changed on 2026-09-20: the violation adjudication was inserted as
 stage 4, so the old stages 4-8 are now 5-9. ``--start-at 8`` used to mean the dump;
@@ -108,6 +134,15 @@ PILOT_LIMIT = 150
 
 N_STAGES = 9
 DUMP_STAGE = 9
+OLLAMA_STAGES = (1, 3, 4, 6, 7)   # stages that call the model
+NEO4J_STAGES = (5, 6, 7, 8)       # clear, KG preflight, KG build, FAISS (stamps the graph)
+
+# CPU threads allowed for the stage-8 embedding. All cores at full load for minutes,
+# then straight back to idle, is the harshest thing this pipeline does to the CPU.
+# A value already set in the shell (OMP_NUM_THREADS etc.) is respected.
+EMBED_CPU_THREADS = int(os.environ.get("RUN_ALL_EMBED_THREADS", "6"))
+_THREAD_VARS = ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS")
 
 # Scripts
 HFACS_EXTRACTOR = DATA / "hfacs_extractor.py"
@@ -145,6 +180,9 @@ ADJUDICATE_LOG = DATA / "adjudicate_violation.log"
 CLEAR_GRAPH_LOG = DATA / "clear_graph.log"
 KG_PREFLIGHT_LOG = DATA / "kg_preflight.log"
 KG_FAISS_LOG = DATA / "kg_faiss_only.log"
+KG_INGEST_LOG = DATA / "kg_ingest_ntsb_train.log"
+NTSB_TRAIN_FAISS = DATA / "ntsb_train_kg.faiss"
+NTSB_TRAIN_IDMAP = DATA / "ntsb_train_kg_id_map.csv"
 DUMP_LOG = DATA / "neo4j_dump.log"
 
 NEO4J_DEFAULTS = {
@@ -224,26 +262,35 @@ class StageFailure(RuntimeError):
 # ---------------------------------------------------------------------------
 
 def run_logged(argv: list[str], log_path: Path, *, label: str,
-               cwd: Path = REPO_ROOT, check: bool = True) -> int:
+               cwd: Path = REPO_ROOT, check: bool = True,
+               extra_env: dict | None = None) -> int:
     """Run `argv`, streaming combined stdout/stderr into `log_path`.
 
     Returns the exit code. Raises StageFailure on a non-zero exit when
     `check` is set. The child inherits this process's environment, so the
-    NEO4J_* variables normalised in check_neo4j_env() reach it.
+    NEO4J_* variables normalised in check_neo4j_env() reach it. `extra_env`
+    adds variables for this one child only (the stage-8 thread cap).
     """
     say(f"{label}: {quote(argv)}")
     say(f"{label}: logging to {log_path}")
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+        say(f"{label}: with " + ", ".join(f"{k}={v}" for k, v in extra_env.items()))
     started = time.time()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8", errors="replace") as fh:
-        fh.write(f"# {label}\n# {_stamp()}\n# {quote(argv)}\n\n")
+        fh.write(f"# {label}\n# {_stamp()}\n# {quote(argv)}\n")
+        if extra_env:
+            fh.write("# env: " + " ".join(f"{k}={v}" for k, v in extra_env.items()) + "\n")
+        fh.write("\n")
         fh.flush()
         proc = subprocess.run(
             argv,
             cwd=str(cwd),
             stdout=fh,
             stderr=subprocess.STDOUT,
-            env=os.environ.copy(),
+            env=env,
             check=False,
         )
     elapsed = time.time() - started
@@ -508,8 +555,8 @@ def preflight(args: argparse.Namespace) -> None:
     check_files()
     first, last = args.start_at, args.stop_after
     in_range = lambda stages: any(first <= n <= last for n in stages)
-    needs_ollama = in_range((1, 3, 4, 6, 7))       # extraction, adjudication, KG build
-    needs_neo4j = in_range((5, 6, 7, 8))           # clear, KG build, FAISS stamps the graph
+    needs_ollama = in_range(OLLAMA_STAGES)         # extraction, adjudication, KG build
+    needs_neo4j = in_range(NEO4J_STAGES)           # clear, KG build, FAISS stamps the graph
     runs_dump = last >= DUMP_STAGE and not args.skip_dump
     if needs_ollama:
         check_generation_settings()
@@ -527,7 +574,55 @@ def preflight(args: argparse.Namespace) -> None:
             "Neo4j, so its environment and connection are not checked.")
     if runs_dump:
         check_dump_backend()
+    if in_range((8,)):
+        check_embedding_device()
     say("Preflight complete.")
+
+
+EMBED_DEVICE_PROBE = (
+    "import torch; "
+    "print('cuda:' + torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu')"
+)
+
+
+def check_embedding_device() -> None:
+    """Say where stage 8 will embed. Information only: both devices work, but on
+    the CPU this is the heaviest sustained load of the whole run."""
+    res = run_capture([PY, "-c", EMBED_DEVICE_PROBE])
+    device = res.stdout.strip().splitlines()[-1] if res.returncode == 0 and res.stdout.strip() else "unknown"
+    if device.startswith("cuda:"):
+        say(f"Embedding: stage 8 will run on the GPU ({device[5:]}); CPU threads "
+            f"capped at {EMBED_CPU_THREADS}.")
+    else:
+        say(f"Embedding: stage 8 will run on the CPU ({device}), capped at "
+            f"{EMBED_CPU_THREADS} threads. A CUDA build of PyTorch would move it "
+            "to the GPU.")
+
+
+def embed_thread_env() -> dict:
+    """Thread-cap variables for the embedding child. Anything the user already set
+    in the shell wins."""
+    return {v: str(EMBED_CPU_THREADS) for v in _THREAD_VARS if not os.environ.get(v)}
+
+
+def unload_model(reason: str) -> None:
+    """Ask Ollama to drop the model now instead of after its idle timer.
+
+    Never fatal: a model that is already gone, or an Ollama that has exited, is
+    exactly the state this is trying to reach.
+    """
+    if shutil.which("ollama") is None:
+        return
+    try:
+        res = run_capture(["ollama", "stop", MODEL], timeout=60)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        say(f"Ollama: could not unload {MODEL} ({exc}); it will unload on its idle timer.")
+        return
+    if res.returncode == 0:
+        say(f"Ollama: unloaded {MODEL} ({reason}). The GPU is free.")
+    else:
+        say(f"Ollama: 'ollama stop {MODEL}' returned {res.returncode} — the model was "
+            "probably not loaded. Continuing.")
 
 
 # ---------------------------------------------------------------------------
@@ -637,7 +732,10 @@ def cmd_kg_preflight() -> list[str]:
 
 
 def cmd_kg_build() -> list[str]:
-    return [PY, str(KG_BUILDER)] + _kg_common()
+    # --skip-faiss: stage 8 builds the indexes, once, and then verifies them
+    # against the graph. Without the flag kg_builder also builds them here, so the
+    # same three indexes were embedded twice in a row.
+    return [PY, str(KG_BUILDER)] + _kg_common() + ["--skip-faiss"]
 
 
 def cmd_faiss_only() -> list[str]:
@@ -708,7 +806,7 @@ def stage_compare() -> None:
 
 
 def stage_full_extraction(resume: bool) -> None:
-    say("stage 3: ~4 hours over 1,013 records, checkpointing every "
+    say("stage 3: ~1.5 hours over 1,013 records, checkpointing every "
         f"{CHECKPOINT_EVERY}. Safe to leave unattended.")
     run_logged(cmd_full_extraction(resume), EXTRACT_LOG, label="stage 3 extraction")
 
@@ -750,7 +848,7 @@ def stage_adjudicate(force: bool) -> None:
         shutil.move(str(ADJUDICATION_CSV), str(dest))
         say(f"stage 4: previous adjudication moved to {dest.name}. Until this stage "
             "finishes, the dataloader applies NO violation override.")
-    say(f"stage 4: ~2 hours. One deterministic pass over all 1,013 records, then two "
+    say(f"stage 4: ~40 minutes. One deterministic pass over all 1,013 records, then two "
         f"sampled passes over the candidates plus a reliability sample, all on {MODEL}.")
     run_logged(cmd_adjudicate(), ADJUDICATE_LOG, label="stage 4 violation adjudication")
     banner("Violation adjudication — report")
@@ -776,9 +874,9 @@ def stage_kg_preflight() -> None:
 
 
 def stage_kg_build() -> None:
-    say("stage 7: ~8 hours over ~2,100 records. The three --*-csv flags are "
-        "mandatory; without them --source all would default to asrs_clean.csv "
-        "(44,448 records) and run for weeks.")
+    say("stage 7: ~1.5 hours over ~2,100 records, graph only (the FAISS indexes are "
+        "stage 8). The three --*-csv flags are mandatory; without them --source all "
+        "would default to asrs_clean.csv (44,448 records) and run for weeks.")
     run_logged(cmd_kg_build(), KG_BUILD_LOG, label="stage 7 KG build")
 
 
@@ -796,8 +894,19 @@ def _csv_rows(path: Path) -> int:
         return max(sum(1 for _ in csv.reader(fh)) - 1, 0)
 
 
+def cmd_ingest_ntsb_train() -> list[str]:
+    return [PY, str(KG_BUILDER), "--ingest-ntsb-train"]
+
+
+EVENT_PHASE = DATA / "event_phase.csv"
+KG_PHASE_LOG = DATA / "kg_update_phase.log"
+
+
 def stage_faiss_only() -> None:
-    run_logged(cmd_faiss_only(), KG_FAISS_LOG, label="stage 8 FAISS indexes")
+    # The only CPU-heavy step of the run, so it gets a thread cap. With a CUDA
+    # PyTorch the encoder is on the GPU and the cap just bounds the tokenizer.
+    run_logged(cmd_faiss_only(), KG_FAISS_LOG, label="stage 8 FAISS indexes",
+               extra_env=embed_thread_env())
     built = [DATA / n for n in (
         "asias.faiss", "asrs.faiss", "ntsb_kg.faiss",
         "asias_id_map.csv", "asrs_id_map.csv", "ntsb_kg_id_map.csv",
@@ -805,6 +914,35 @@ def stage_faiss_only() -> None:
     for p in built:
         say(f"  {'OK  ' if p.exists() else 'MISSING'} {p.name}")
     _verify_faiss_alignment()
+
+    # The NTSB training events go into the graph last: stage 5 emptied it, and this
+    # needs the labels from stages 3-4. No model call is made. Without this step
+    # the experiment's retrieval conditions refuse to run, by design.
+    say("stage 8: writing the NTSB training events into the graph (no model calls; "
+        "validation and test events are never written).")
+    run_logged(cmd_ingest_ntsb_train(), KG_INGEST_LOG,
+               label="stage 8 NTSB training events -> graph", extra_env=embed_thread_env())
+    print(tail(KG_INGEST_LOG, 4), flush=True)
+    for p in (NTSB_TRAIN_FAISS, NTSB_TRAIN_IDMAP):
+        say(f"  {'OK  ' if p.exists() else 'MISSING'} {p.name}")
+    if not NTSB_TRAIN_FAISS.exists():
+        raise StageFailure(
+            "Stage 8 did not produce the index for the NTSB training events. The "
+            f"retrieval conditions cannot run without it. See {KG_INGEST_LOG.name}.")
+
+    # Phase-of-flight nodes, the event-descriptive context structural retrieval
+    # matches on. Stage 5 emptied the graph, so they are re-attached every run.
+    # The phases themselves come from data/derive_phase.py (an LLM pass over the
+    # narratives, run once; it depends on nothing this pipeline changes).
+    if EVENT_PHASE.exists():
+        run_logged([PY, str(KG_BUILDER), "--update-phase"], KG_PHASE_LOG,
+                   label="stage 8 phase-of-flight nodes")
+        print(tail(KG_PHASE_LOG, 2), flush=True)
+    else:
+        say("stage 8: WARNING - data/event_phase.csv is missing, so the graph has no "
+            "phase-of-flight nodes and structural retrieval (C3, C4) falls back to "
+            "weather, crew and calendar context. Run:  python data/derive_phase.py  "
+            "then  python data/kg_builder.py --update-phase")
 
 
 def _verify_faiss_alignment() -> None:
@@ -1025,16 +1163,16 @@ def stage_dump(strict: bool) -> None:
 def build_stages(args: argparse.Namespace) -> list[dict]:
     return [
         {"n": 1, "name": "Pilot extraction (150 records)",
-         "eta": "~20 min", "cmd": cmd_pilot(),
+         "eta": "~15 min", "cmd": cmd_pilot(),
          "run": stage_pilot},
         {"n": 2, "name": "Comparison against the current extraction",
          "eta": "seconds", "cmd": cmd_compare(),
          "run": stage_compare},
         {"n": 3, "name": "Full extraction (1,013 records)",
-         "eta": "~4 h", "cmd": cmd_full_extraction(args.resume_extraction),
+         "eta": "~1.5 h", "cmd": cmd_full_extraction(args.resume_extraction),
          "run": lambda: stage_full_extraction(args.resume_extraction)},
         {"n": 4, "name": "Violation adjudication (strict HFACS, majority of 3)",
-         "eta": "~2 h", "cmd": cmd_adjudicate(),
+         "eta": "~40 min", "cmd": cmd_adjudicate(),
          "run": lambda: stage_adjudicate(args.force_adjudication)},
         {"n": 5, "name": "Clear the Neo4j graph",
          "eta": "seconds", "cmd": cmd_clear_graph(),
@@ -1042,10 +1180,10 @@ def build_stages(args: argparse.Namespace) -> list[dict]:
         {"n": 6, "name": "Preflight KG build (5 records, dry run)",
          "eta": "~1 min", "cmd": cmd_kg_preflight(),
          "run": stage_kg_preflight},
-        {"n": 7, "name": "Full KG build (~2,100 records)",
-         "eta": "~8 h", "cmd": cmd_kg_build(),
+        {"n": 7, "name": "KG build, graph only (~2,100 records)",
+         "eta": "~1.5 h", "cmd": cmd_kg_build(),
          "run": stage_kg_build},
-        {"n": 8, "name": "FAISS-only index build",
+        {"n": 8, "name": "FAISS indexes + NTSB training events into the graph",
          "eta": "minutes", "cmd": cmd_faiss_only(),
          "run": stage_faiss_only},
         {"n": 9, "name": "Neo4j dump",
@@ -1119,7 +1257,7 @@ def main() -> int:
     if args.preflight_only:
         say("Expected total : seconds — checks only, no stage will run.")
     else:
-        say("Expected total : roughly 14 hours, mostly unattended.")
+        say("Expected total : roughly 4 hours, mostly unattended.")
 
     run_started = time.time()
     try:
@@ -1148,6 +1286,11 @@ def main() -> int:
                 continue
             banner(f"[{st['n']}/{N_STAGES}] {st['name']}  ({st['eta']})")
             st["run"]()
+            # Free the GPU the moment the last model stage of THIS run is done,
+            # rather than leaving Ollama to unload mid-embedding five minutes later.
+            later_llm = any(st["n"] < n <= args.stop_after for n in OLLAMA_STAGES)
+            if st["n"] in OLLAMA_STAGES and not later_llm:
+                unload_model(f"stage {st['n']} was the last model stage of this run")
 
     except StageFailure as exc:
         banner("PIPELINE FAILED")
@@ -1168,7 +1311,7 @@ def main() -> int:
     say(f"Total elapsed: {human(time.time() - run_started)}")
     say("Send back:")
     for path in (RESULTS_CSV, ADJUDICATION_CSV, PILOT_CSV, EXTRACT_LOG, ADJUDICATE_LOG,
-                 KG_BUILD_LOG, DATA / "asias.faiss", DATA / "asrs.faiss", DATA / "ntsb_kg.faiss",
+                 KG_BUILD_LOG, NTSB_TRAIN_FAISS, NTSB_TRAIN_IDMAP, DATA / "asias.faiss", DATA / "asrs.faiss", DATA / "ntsb_kg.faiss",
                  DATA / "asias_id_map.csv", DATA / "asrs_id_map.csv",
                  DATA / "ntsb_kg_id_map.csv", REPO_ROOT / "neo4j.dump"):
         say(f"  {'OK  ' if path.exists() else 'MISSING'} {path}")
@@ -1198,11 +1341,17 @@ def _say_downstream(args: argparse.Namespace) -> None:
             "conditions C2-C5 retrieve different neighbours than before.")
     say("Still valid: data/test_query_views.csv (built from the narratives and the "
         "split, not from the labels) and data/.emb_cache/ (keyed by text).")
-    say("Bring it back in line with, Neo4j running for C3-C5:")
+    if labels_changed and not (args.start_at <= 8 <= args.stop_after):
+        say("The NTSB training events in the graph still carry the OLD labels. The "
+            "retrieval conditions will refuse to run until they are rewritten:")
+        say("  python data/kg_builder.py --ingest-ntsb-train")
+    say("Bring it back in line with, Neo4j running (every retrieval condition "
+        "reads the graph and stops without it):")
     for line in ("python run_conditions.py",
                  "python data/leakage_audit.py",
-                 "python models/lstm/eval_conditions.py                    # L2, the standard view",
+                 "python models/lstm/eval_conditions.py                    # L1b, the standard view",
                  "python models/lstm/eval_conditions.py --query-view L1    # lower bound",
+                 "python models/lstm/eval_conditions.py --query-view L2    # comparison (B and C)",
                  "python models/lstm/eval_conditions.py --query-view full  # upper bound"):
         say(f"  {line}")
 

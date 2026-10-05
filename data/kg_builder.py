@@ -68,6 +68,7 @@ CONTEXT_EDGE = {
     "PersonnelContextNode": "HAS_PERSONNEL_CONTEXT",
     "OrganizationalContextNode": "HAS_ORG_CONTEXT",
     "TechnologicalContextNode": "HAS_TECH_CONTEXT",   # SDR maintenance-reliability
+    "OperationalContextNode": "HAS_OPS_CONTEXT",      # phase of flight (derive_phase.py)
 }
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -324,11 +325,40 @@ def _event_date(row: pd.Series):
         return None
 
 
-def _severity(row: pd.Series, source: str):
-    # ASRS has no injury/severity data; NTSB + ASIAS carry severity_class (stored
-    # on the EventNode so the Stage-5 retriever can build the D-prior).
-    if source == "ASRS":
+def _asrs_severity(result):
+    """Severity ordinal for an ASRS report, derived from its `result` field.
+
+    ASRS records no injury counts, but `result` lists what the event led to, and two
+    of its entries are outcome statements. That is enough to place most reports on
+    the same gravity scale the other sources use:
+
+        no result recorded                        -> None  (unknown)
+        'Physical Injury / Incapacitation'        -> None  (an injury, but minor vs
+                                                            serious is not stated,
+                                                            and that is exactly the
+                                                            low/high boundary)
+        'Aircraft Damaged'                        -> 1     (damage of unstated
+                                                            extent; low either way)
+        anything else                             -> 0     (no harm reported)
+
+    Every value this returns is on the LOW side of the high/low split. That is the
+    honest content of an incident-report database, not a gap to be filled.
+    """
+    res = _clean(result).lower()
+    if not res:
         return None
+    if "physical injury" in res:
+        return None
+    if "aircraft damaged" in res:
+        return 1
+    return 0
+
+
+def _severity(row: pd.Series, source: str):
+    # NTSB + ASIAS carry severity_class; ASRS severity is derived from `result`.
+    # Stored on the EventNode so retrieved neighbours carry their outcome.
+    if source == "ASRS":
+        return _asrs_severity(row.get("result"))
     try:
         return int(float(_clean(row.get("severity_class"))))
     except (ValueError, TypeError):
@@ -382,6 +412,7 @@ class KGWriter:
             "CREATE INDEX pers_key IF NOT EXISTS FOR (n:PersonnelContextNode) ON (n.feature, n.value)",
             "CREATE INDEX org_key IF NOT EXISTS FOR (n:OrganizationalContextNode) ON (n.feature, n.value_bracket)",
             "CREATE INDEX tech_key IF NOT EXISTS FOR (n:TechnologicalContextNode) ON (n.feature, n.value_bracket)",
+            "CREATE INDEX ops_key IF NOT EXISTS FOR (n:OperationalContextNode) ON (n.feature, n.value)",
         ]
         for s in stmts:
             self._run(s)
@@ -650,6 +681,193 @@ def build_faiss(writer: KGWriter, source: str, limit=None, path=None):
 
 
 # ---------------------------------------------------------------------------
+# Severity refresh + NTSB training events in the graph (no LLM)
+# ---------------------------------------------------------------------------
+
+def update_severity(writer: KGWriter, source: str, path=None):
+    """Re-derive severity_class for EXISTING EventNodes of one source and store it.
+    No extraction, no new nodes. Used to give ASRS events a severity after the
+    fact; safe to repeat."""
+    path = path or _DEFAULT_CSV[source]
+    df = pd.read_csv(path, dtype=str)
+    n_set = n_known = 0
+    for _, row in df.iterrows():
+        event_id = _clean(row.get(_ID_COL[source]))
+        if not event_id:
+            continue
+        sev = _severity(row, source)
+        writer._run(
+            "MATCH (e:EventNode {event_id:$id, source:$src}) "
+            "SET e.severity_class=$sev, e.severity_basis=$basis",
+            id=event_id, src=source, sev=sev,
+            basis=("derived from ASRS result field" if source == "ASRS" else "recorded"))
+        n_set += 1
+        n_known += sev is not None
+    logging.info("%s: severity refreshed on %d events (%d known)", source, n_set, n_known)
+
+
+def update_phase(writer: KGWriter, path=None):
+    """Attach a phase-of-flight node to every graph event that has one.
+
+    Phases come from data/derive_phase.py, which reads them from each event's
+    narrative with one extractor and one closed vocabulary for every source, so
+    the three databases' different native formats never have to be reconciled.
+    'unknown' gets no node, so an event without a phase simply cannot match on it.
+    Only events already in the graph are touched (MATCH), so the validation and
+    test entries in the phase file never enter the graph. Old phase edges are
+    removed first, so this is safe to repeat. No LLM call.
+    """
+    path = path or os.path.join(_HERE, "event_phase.csv")
+    if not os.path.exists(path):
+        raise SystemExit(f"{path} not found. Run:  python data/derive_phase.py")
+    ph = pd.read_csv(path, dtype=str).fillna("unknown")
+    ph = ph[ph["phase"] != "unknown"]
+    writer.ensure_schema()
+    writer._run("MATCH (:EventNode)-[r:HAS_OPS_CONTEXT]->() DELETE r")
+    rows = [{"id": k, "src": s, "v": v} for k, s, v in zip(ph["key"], ph["source"], ph["phase"])]
+    n = 0
+    for i in range(0, len(rows), 500):
+        res = writer._run(
+            "UNWIND $rows AS r "
+            "MATCH (e:EventNode {event_id: r.id, source: r.src}) "
+            "MERGE (c:OperationalContextNode {feature:'phase_of_flight', value: r.v}) "
+            "MERGE (e)-[:HAS_OPS_CONTEXT]->(c) RETURN count(e) AS n",
+            rows=rows[i:i + 500])
+        n += res[0]["n"] if res else 0
+    by = writer._run(
+        "MATCH (e:EventNode) OPTIONAL MATCH (e)-[:HAS_OPS_CONTEXT]->(c) "
+        "RETURN CASE WHEN e.origin = 'ntsb_train' THEN 'NTSB-train' ELSE e.source END AS s, "
+        "count(e) AS n, count(c) AS k")
+    logging.info("phase of flight attached to %d graph events; coverage by source: %s", n,
+                 {r["s"]: f"{r['k']}/{r['n']}" for r in by})
+
+
+NTSB_TRAIN_ORIGIN = "ntsb_train"
+NTSB_TRAIN_FAISS = os.path.join(_HERE, "ntsb_train_kg.faiss")
+NTSB_TRAIN_IDMAP = os.path.join(_HERE, "ntsb_train_kg_id_map.csv")
+# Factor nodes are keyed (tier, value) and the KG prompt fills `value` with a schema
+# subcategory. The Stage-2 extraction records the TIER plus a free-text evidence
+# phrase, not a subcategory, so its factors attach to one tier-level node per tier.
+TIER_LEVEL_VALUE = "Unspecified"
+
+
+def ingest_ntsb_train(writer: KGWriter):
+    """Put the NTSB TRAINING events into the knowledge graph, as graph events.
+
+    Why. Retrieval now reads the graph and nothing else. The graph held only
+    incident-database events (ASIAS, ASRS) and 100 older NTSB events from a
+    different population, so it had almost no outcome information for the events
+    being predicted: ASIAS is entirely low severity and ASRS records none. The
+    training events are the past investigated accidents a real knowledge base
+    would contain, and they are where the severity information is.
+
+    What is written, per training event: the EventNode (source 'NTSB',
+    origin 'ntsb_train', its recorded severity ordinal), its context nodes, one
+    HAS_FACTOR edge per mined tier, and its extracted causal links. The labels are
+    the ones the model is trained on: hfacs_results.csv with the strict violation
+    adjudication applied. NO LLM call is made.
+
+    What is deliberately NOT written: factor-factor and context-factor
+    co-occurrence edges. Their weights are counters, so re-running this step would
+    double them; nothing in retrieval reads them.
+
+    Leakage. Only the TRAIN split goes in. Validation and test events are never
+    written, and the retriever refuses to run if it finds one in the graph. A
+    training event never retrieves itself (self-exclusion by event id).
+
+    Idempotent: previously ingested training events are removed first. Re-run it
+    whenever the split or the labels change; the retriever checks a signature and
+    stops with an instruction if the graph is out of date.
+    """
+    import json
+    import numpy as np
+    import faiss
+    from sentence_transformers import SentenceTransformer
+    import ntsbdataloader as N
+    from rag_retriever import embed_many
+
+    df = N.load_and_join()
+    train, _val, _test = N._split(df)
+    raw_sev = pd.read_csv(N.NTSB_CLEAN, dtype=str).set_index("ev_id")["severity_class"]
+    hf = pd.read_csv(N.HFACS_RESULTS, dtype=str)
+    hf = hf[hf["extraction_status"] == "success"].drop_duplicates("ev_id", keep="last")
+    hf_json = dict(zip(hf["ev_id"].astype(str), hf["hfacs_json"].fillna("{}")))
+    rel_json = dict(zip(hf["ev_id"].astype(str), hf["relationships_json"].fillna("[]")))
+
+    if writer.driver is not None:
+        clash = writer._run(
+            "MATCH (e:EventNode {source:'NTSB'}) WHERE e.origin IS NULL "
+            "AND e.event_id IN $ids RETURN count(e) AS n",
+            ids=train["ev_id"].astype(str).tolist())
+        if clash and clash[0]["n"]:
+            raise SystemExit(f"{clash[0]['n']} training events already exist in the graph "
+                             "as NTSB-KG events. Refusing to overwrite them.")
+        old = writer._run("MATCH (e:EventNode {origin:$o}) DETACH DELETE e RETURN count(e) AS n",
+                          o=NTSB_TRAIN_ORIGIN)
+        logging.info("NTSB-train: removed %d previously ingested events",
+                     old[0]["n"] if old else 0)
+    writer.ensure_schema()
+
+    from tqdm import tqdm
+    ids, texts = [], []
+    for _, row in tqdm(train.iterrows(), total=len(train), desc="KG[NTSB-train]"):
+        ev = str(row["ev_id"])
+        try:
+            sev = int(float(raw_sev.get(ev)))
+        except (TypeError, ValueError):
+            sev = None
+        writer.merge_event(ev, "NTSB", _event_date(row), sev)
+
+        links = []
+        try:
+            for r in json.loads(rel_json.get(ev, "[]")):
+                if isinstance(r, dict) and r.get("relation") == "LEADS_TO" \
+                        and r.get("subject") in EXTRACT_TIERS and r.get("object") in EXTRACT_TIERS:
+                    links.append(f"{r['subject']}>{r['object']}")
+        except (json.JSONDecodeError, TypeError):
+            pass
+        writer._run(
+            "MATCH (e:EventNode {event_id:$id, source:'NTSB'}) "
+            "SET e.origin=$o, e.causal_links=$links, e.severity_basis='recorded'",
+            id=ev, o=NTSB_TRAIN_ORIGIN, links=sorted(set(links)))
+
+        for label, keys in _context_nodes(row, "NTSB"):
+            writer.connect_event_context(ev, "NTSB", label, keys)
+
+        try:
+            mined = json.loads(hf_json.get(ev, "{}")) or {}
+        except (json.JSONDecodeError, TypeError):
+            mined = {}
+        # Preconditions at the raw-tier level from the extraction; unsafe acts from
+        # the dataloader, which has the strict violation adjudication applied.
+        tiers = {t for t in N.PRECOND_TIERS if mined.get(t)} | set(row["_uns"])
+        for t in sorted(tiers):
+            writer.connect_event_factor(ev, "NTSB", t, TIER_LEVEL_VALUE)
+        writer.mark_processed(ev, "NTSB")
+        ids.append(ev)
+        texts.append(strip_outcome(_clean(row.get("combined_text"))))
+
+    # Index over the same text the retriever queries with.
+    emb = np.ascontiguousarray(embed_many(SentenceTransformer(RETRIEVAL_MODEL), texts),
+                               dtype="float32")
+    index = faiss.IndexFlatIP(emb.shape[1])
+    index.add(emb)
+    faiss.write_index(index, NTSB_TRAIN_FAISS)
+    pd.DataFrame({"embedding_index": range(len(ids)), "event_id": ids}).to_csv(
+        NTSB_TRAIN_IDMAP, index=False)
+    for i, ev in enumerate(ids):
+        writer.set_embedding_index(ev, "NTSB", i)
+
+    sig = N.ntsb_train_signature(train)
+    writer._run("MERGE (m:KGMeta {key:$k}) SET m.signature=$sig, m.n=$n, m.updated=$ts",
+                k=NTSB_TRAIN_ORIGIN, sig=sig, n=len(ids),
+                ts=time.strftime("%Y-%m-%d %H:%M:%S"))
+    logging.info("NTSB-train: %d training events in the graph (signature %s); wrote %s "
+                 "(ntotal=%d, dim=%d)", len(ids), sig[:12], NTSB_TRAIN_FAISS,
+                 index.ntotal, emb.shape[1])
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -682,6 +900,17 @@ def main():
     parser.add_argument("--dry-run", action="store_true",
                         help="No Neo4j writes; run extraction + edge logic + "
                              "FAISS and print a node/edge tally.")
+    parser.add_argument("--update-severity", action="store_true",
+                        help="Re-derive and store severity on existing EventNodes of "
+                             "the chosen --source (gives ASRS events a severity). No LLM.")
+    parser.add_argument("--update-phase", action="store_true",
+                        help="Attach phase-of-flight nodes (from data/event_phase.csv, "
+                             "built by data/derive_phase.py) to the events in the graph. "
+                             "No LLM. Run after --ingest-ntsb-train.")
+    parser.add_argument("--ingest-ntsb-train", action="store_true",
+                        help="Write the NTSB TRAINING events into the graph from the "
+                             "committed labels (no LLM) and build their FAISS index. "
+                             "Validation and test events are never written.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO,
@@ -704,6 +933,16 @@ def main():
             writer.ensure_schema()
             for src in sources:
                 update_context(writer, src, limit=args.limit, path=csv_for[src])
+            return
+
+        if args.update_severity or args.ingest_ntsb_train or args.update_phase:
+            if args.update_severity:
+                for src in sources:
+                    update_severity(writer, src, path=csv_for[src])
+            if args.ingest_ntsb_train:
+                ingest_ntsb_train(writer)
+            if args.update_phase:
+                update_phase(writer)
             return
 
         if not args.faiss_only:

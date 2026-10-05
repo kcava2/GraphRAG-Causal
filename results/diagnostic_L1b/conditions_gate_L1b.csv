@@ -1,5 +1,0 @@
-condition,query_view,B:operator,B:personnel,B:situational,C:skill,C:decision,C:perception,C:violation,D:severity,_mean_similarity,_mean_exemplars
-C2,L1b,0.6653,0.6204,0.6475,0.6672,0.6687,0.7274,0.3175,0.8289,0.6361,14.7129
-C3,L1b,0.5108,0.4983,0.505,0.4759,0.4683,0.4527,0.3325,0.5037,0.897,15.0
-C4,L1b,0.6507,0.5695,0.5992,0.6287,0.642,0.6395,0.315,0.7964,0.7129,15.0
-C5,L1b,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.7964,0.7129,15.0

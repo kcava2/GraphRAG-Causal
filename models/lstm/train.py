@@ -42,7 +42,8 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 from data.ntsbdataloader import (get_dataloaders, ENV_SLICE, OPER_SLICE,  # noqa: E402
                                  STEP_B_BASE, NTSB_CLEAN, FEWSHOT_DIM, FS_B, FS_C,
-                                 FS_D, FS_HAS_BC, FS_HAS_D, FS_SIM)
+                                 FS_D, FS_HAS_BC, FS_HAS_D, FS_SIM, FS_SEV_ORD,
+                                 FS_IN_CORPUS)
 
 
 # ---------------------------------------------------------------------------
@@ -160,55 +161,69 @@ class FewShotEncoder(nn.Module):
         # small temperature lets closer neighbours count for more. Learned, because
         # the right sharpness differs between retrieval strategies.
         self.log_tau = nn.Parameter(torch.tensor(math.log(tau)))
-        # The encoder emits the learned summary AND the explicit similarity-weighted
-        # vote, so `out_dim` seen by the rest of the model is the sum of the two.
-        self.out_dim = out_dim + fewshot_dim
+        # The encoder emits the learned summary AND two explicit similarity-weighted
+        # votes, so `out_dim` seen by the rest of the model is the sum of the three.
+        self.out_dim = out_dim + 2 * fewshot_dim
 
     def forward(self, fewshot, fewshot_mask):
-        """-> [batch, out_dim + fewshot_dim]: learned summary || weighted vote.
+        """-> [batch, out_dim + 2 * fewshot_dim]:
+        learned summary || vote of NTSB events in the graph || vote of other graph events.
 
-        The learned half is an LSTM over the exemplar sequence, masked-mean-pooled.
-        The second half is the similarity-weighted mean of the raw exemplar rows —
-        the k-NN vote, computed rather than learned. Handing the model that
-        aggregate is an inductive bias, not extra information: every value is a
-        deterministic function of the exemplar block it already sees.
+        The learned part is an LSTM over the exemplar sequence, masked-mean-pooled.
+        The votes are similarity-weighted means of the raw exemplar rows — the k-NN
+        vote, computed rather than learned. Handing the model that aggregate is an
+        inductive bias, not extra information: every value is a deterministic
+        function of the exemplar block it already sees.
 
-        Two details of the vote matter:
+        Why two votes. Every neighbour is a graph event, but they are of two kinds:
+        NTSB training events, labelled by the same extraction as the targets, and
+        everything else (ASIAS, ASRS, the older NTSB slice), labelled by the KG
+        builder's own prompt and almost entirely low severity. Averaged into one
+        vote, a label that is 72% positive in one kind and 6% in the other mostly
+        reports which kind was retrieved. Kept apart, the model learns how far to
+        trust each, and neither can drown the other.
 
-        * Weights are softmax(similarity / tau) over the real neighbours. They were
-          similarity / sum(similarity) over a min-max-normalised score, which gave
-          the weakest neighbour weight exactly 0 and ranked the rest by position.
+        Three details of each vote matter:
+
+        * Weights are softmax(similarity / tau) over that vote's own neighbours.
         * Each LABEL block is averaged only over neighbours whose labels are known
-          (has_factor_labels / has_severity). A neighbour with no label used to
-          count as a confident negative. The vote's has_* entries end up holding
-          the share of weight that was labelled, so the model can tell a vote of
-          0.2 backed by every neighbour from one backed by a single neighbour.
+          (has_factor_labels / has_severity), and the severity ordinal likewise. A
+          neighbour with no label used to count as a confident negative. The
+          vote's has_* entries end up holding the share of weight that was
+          labelled, so the model can tell a vote backed by every neighbour from
+          one backed by a single neighbour.
+        * A vote with no neighbours of its kind is all zeros, including its
+          in_corpus entry, which is how the model tells "none retrieved" apart.
         """
         if fewshot is None or fewshot.numel() == 0 or fewshot.size(1) == 0:
             n = fewshot.size(0) if fewshot is not None else 0
             return torch.zeros(n, self.out_dim, device=fewshot.device)
         m = fewshot_mask.unsqueeze(-1)                    # [batch, k, 1]
-        any_real = (m.sum(1) > 0).float()                 # [batch, 1]
 
         out, _ = self.lstm(fewshot)                       # [batch, k, lstm_out]
         pooled = (out * m).sum(1) / m.sum(1).clamp(min=1.0)
 
         tau = self.log_tau.exp().clamp(0.02, 1.0)
-        logit = (fewshot[..., FS_SIM:FS_SIM + 1] / tau).masked_fill(m == 0, -1e9)
-        w = torch.softmax(logit, dim=1) * m               # padding -> exactly 0
-        vote = (fewshot * w).sum(1)                       # [batch, fewshot_dim]
+        sim = fewshot[..., FS_SIM:FS_SIM + 1] / tau
+        corpus = (fewshot[..., FS_IN_CORPUS:FS_IN_CORPUS + 1] > 0).float()
 
-        def known(block, flag):                           # vote over labelled rows only
-            wf = w * fewshot[..., flag:flag + 1]
-            return (fewshot[..., block] * wf).sum(1) / wf.sum(1).clamp(min=1e-6)
+        def vote(member):                                 # member [batch, k, 1], 0/1
+            mm = m * member
+            w = torch.softmax(sim.masked_fill(mm == 0, -1e9), dim=1) * mm
+            v = (fewshot * w).sum(1)                      # [batch, fewshot_dim]
 
-        vote = torch.cat([
-            vote[:, :FS_B.start],
-            known(FS_B, FS_HAS_BC), known(FS_C, FS_HAS_BC), known(FS_D, FS_HAS_D),
-            vote[:, FS_D.stop:]], dim=1)
-        vote = vote * any_real                            # no exemplars -> zeros
+            def known(block, flag):                       # average over labelled rows only
+                wf = w * fewshot[..., flag:flag + 1]
+                return (fewshot[..., block] * wf).sum(1) / wf.sum(1).clamp(min=1e-6)
 
-        return self.drop(torch.cat([pooled, vote], dim=1))
+            v = torch.cat([
+                v[:, :FS_B.start],
+                known(FS_B, FS_HAS_BC), known(FS_C, FS_HAS_BC), known(FS_D, FS_HAS_D),
+                known(slice(FS_SEV_ORD, FS_SEV_ORD + 1), FS_HAS_D),
+                v[:, FS_SEV_ORD + 1:]], dim=1)
+            return v * (mm.sum(1) > 0).float()            # none of this kind -> zeros
+
+        return self.drop(torch.cat([pooled, vote(corpus), vote(1.0 - corpus)], dim=1))
 
 
 class HFACSCausalLSTM(nn.Module):

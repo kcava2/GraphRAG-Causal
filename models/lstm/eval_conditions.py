@@ -18,19 +18,20 @@ outcome and the probable-cause verdict. The view swaps the text used to look up
 the TEST records only; training text, the exemplar pool, the knowledge graph and
 all indexes are untouched, and so are the labels:
 
-    L2    preliminary brief: circumstances, the kind   THE STANDARD VIEW (default).
-          of event and its sequence; no injury or       What an analyst holds when a
-          damage wording, no cause                      preliminary report is out.
-                                                        Scores B and C. Severity is
-                                                        already known at this stage,
-                                                        so D is not scored unless
-                                                        --include-severity is given.
-    L1    pre-departure brief                           lower bound: nothing about
-                                                        the event is known yet
+    L1b   circumstances of the flight INCLUDING the     THE STANDARD VIEW (default).
+          phase of flight, position and what the crew   Scores B, C and D.
+          were doing. Not what happened, how it ended   CAVEAT for D: no outcome
+          or why.                                       wording, but the phase of
+                                                        flight alone predicts severity
+                                                        at AUC ~0.88, so a D score
+                                                        here partly reflects
+                                                        recognising the kind of event.
+    L1    pre-departure brief: nothing about the event  lower bound; passes the
+                                                        severity leakage gate
+    L2    preliminary brief: L1b plus the kind of event comparison. Scores B and C;
+          and its sequence; no outcome, no cause        D only with --include-severity
     full  the complete narrative incl. probable cause   upper bound: retrospective
                                                         classification, not prediction
-    L1b   circumstances incl. phase of flight           optional diagnostic, not part
-                                                        of the standard run
 
 Briefs come from data/build_query_views.py and are gated by data/leakage_audit.py.
 No retraining is involved — the same checkpoints are scored under each view. C1 and
@@ -48,7 +49,7 @@ Statistics, answering different questions:
     got wrong.
 
 Outputs. The suffix always names the view, so a file can never be mistaken for
-another view's: "_L2" (standard), "_L1", "_L1b"; the full-narrative run keeps the
+another view's: "_L1b" (standard), "_L1", "_L2"; the full-narrative run keeps the
 historical unsuffixed names.
     results/conditions_metrics{sfx}.csv    per-seed, per-head metrics
     results/conditions_tiers{sfx}.csv      per-seed, per-LABEL metrics (B groups, C tiers)
@@ -63,8 +64,9 @@ historical unsuffixed names.
 an all-ones predictor scores ~0.79 micro-F1 carrying no information. AUC is
 threshold-free, which makes it the cleanest way to compare retrieval set-ups.
 
-    python models/lstm/eval_conditions.py                      # L2, the standard view
+    python models/lstm/eval_conditions.py                      # L1b, the standard view
     python models/lstm/eval_conditions.py --query-view L1      # lower bound
+    python models/lstm/eval_conditions.py --query-view L2      # comparison (B and C)
     python models/lstm/eval_conditions.py --query-view full    # upper bound
 """
 
@@ -99,6 +101,8 @@ RESULTS = os.path.join(_ROOT, "results")
 SEED_DIR = os.path.join(RESULTS, "seeds")
 FIGURES = os.path.join(_ROOT, "figures")
 QUERY_VIEWS = os.path.join(_ROOT, "data", "test_query_views.csv")
+QUERY_PHASES = os.path.join(_ROOT, "data", "test_query_phase.csv")
+VIEW_PHASE_COL = {"L1b": "l1b_phase", "L2": "l2_phase"}
 ORDER = ["C1", "C2", "C3", "C4", "C5"]
 LABELS = {"C1": "C1 no RAG", "C2": "C2 semantic", "C3": "C3 structural",
           "C4": "C4 hybrid", "C5": "C5 raw RAG"}
@@ -135,6 +139,22 @@ def apply_query_view(df_test: pd.DataFrame, view: str, path: str) -> pd.DataFram
                          f"(first: {missing[:3]}). Re-run data/build_query_views.py.")
     out = df_test.copy()
     out["combined_text"] = [text[e] for e in ids]
+    # Phase of flight follows the view: it is read from the view's own text. An L1
+    # brief describes a flight that has not happened, so an L1 query has no phase.
+    if view == "L1":
+        out["phase_of_flight"] = "unknown"
+    else:
+        if not os.path.exists(QUERY_PHASES):
+            raise SystemExit(f"{QUERY_PHASES} not found. Run: python data/derive_phase.py")
+        ph = pd.read_csv(QUERY_PHASES, dtype=str).fillna("unknown")
+        ph = dict(zip(ph["ev_id"].astype(str), ph[VIEW_PHASE_COL[view]]))
+        miss = [e for e in ids if e not in ph]
+        if miss:
+            raise SystemExit(f"{len(miss)} test records have no {view} phase (first: "
+                             f"{miss[:3]}). Re-run data/derive_phase.py.")
+        out["phase_of_flight"] = [ph[e] for e in ids]
+    print(f"  phase of flight known for {(out['phase_of_flight'] != 'unknown').mean():.0%} "
+          f"of TEST queries under {view}.")
     print(f"Query view {view}: retrieval text replaced for {len(out)} TEST records "
           f"(mean {out['combined_text'].str.len().mean():.0f} chars, was "
           f"{df_test['combined_text'].astype(str).str.len().mean():.0f}).")
@@ -147,26 +167,28 @@ def apply_query_view(df_test: pd.DataFrame, view: str, path: str) -> pd.DataFram
 
 _SOURCE_CACHE = {}
 _DATASET_CACHE = {}
+_HELD_OUT = set()        # validation + test ids: must never be found in the graph
 
 
 def _source_for(cfg, encoders, df_train):
     """Exemplar source matching a checkpoint's condition, cached across seeds.
 
-    `df_train` MUST be passed. Training builds its exemplars from the KG *and* the
-    in-distribution LOFO pool; omitting it here would evaluate the model on
-    KG-only exemplars — a different input distribution from the one it was trained
-    on, which silently destroys the predictions rather than raising anything.
+    Exemplars come from the knowledge graph only. `df_train` is passed so the
+    source can verify that the graph's NTSB training events are this split with
+    these labels, and `_HELD_OUT` so it can verify that no validation or test
+    event is in the graph. Either failure raises.
     """
     strategy, raw = cfg.get("strategy"), bool(cfg.get("raw_mode"))
     if not strategy:
         return None
-    k, kgl = int(cfg.get("fewshot_k", 0)), bool(cfg.get("kg_factor_labels"))
+    k, kgl = int(cfg.get("fewshot_k", 0)), bool(cfg.get("kg_factor_labels", True))
     key = (strategy, raw, k, kgl)
     if key not in _SOURCE_CACHE:
         from rag_retriever import build_retriever
-        src = GraphFewShotSource(build_retriever(strategy=strategy, k=k),
-                                 raw_mode=raw, kg_factor_labels=kgl)
-        src.attach_encoders(encoders, df_train)
+        retr = build_retriever(strategy=strategy, k=k)
+        retr.require_graph()
+        src = GraphFewShotSource(retr, raw_mode=raw, kg_factor_labels=kgl)
+        src.attach_encoders(encoders, df_train, forbidden_ids=_HELD_OUT)
         _SOURCE_CACHE[key] = src
     return _SOURCE_CACHE[key]
 
@@ -176,7 +198,7 @@ def _dataset_for(cfg, df_test, df_train, encoders):
     is built once per condition rather than once per checkpoint."""
     k = int(cfg.get("fewshot_k", 0))
     key = (cfg.get("strategy"), bool(cfg.get("raw_mode")), k,
-           bool(cfg.get("kg_factor_labels")))
+           bool(cfg.get("kg_factor_labels", True)))
     if key not in _DATASET_CACHE:
         source = _source_for(cfg, encoders, df_train) if k else None
         _DATASET_CACHE[key] = NTSBSequenceDataset(df_test, encoders, retriever=None,
@@ -496,13 +518,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", default=NTSB_CLEAN)
     ap.add_argument("--batch-size", type=int, default=32)
-    ap.add_argument("--query-view", choices=["L2", "L1", "full", "L1b"], default="L2",
-                    help="Text used to look up the TEST records. L2 (default, the "
-                         "standard view) = preliminary brief: circumstances plus the "
-                         "kind of event, no outcome and no cause. L1 = pre-departure "
-                         "brief (lower bound). full = complete narrative incl. probable "
-                         "cause (upper bound, retrospective). L1b = circumstances incl. "
-                         "phase of flight (optional diagnostic).")
+    ap.add_argument("--query-view", choices=["L1b", "L1", "L2", "full"], default="L1b",
+                    help="Text used to look up the TEST records. L1b (default, the "
+                         "standard view) = circumstances of the flight incl. the phase "
+                         "of flight, but not what happened. L1 = pre-departure brief, "
+                         "nothing about the event (lower bound). L2 = preliminary brief "
+                         "with the kind of event (comparison, B and C). full = complete "
+                         "narrative incl. probable cause (upper bound, retrospective).")
     ap.add_argument("--include-severity", action="store_true",
                     help="Also score head D under L2. Off by default: injuries and "
                          "damage are already known when a preliminary report exists, "
@@ -526,6 +548,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     df = load_and_join(a.input)
     df_train, _df_val, df_test = _split(df)
+    _HELD_OUT.update(_df_val["ev_id"].astype(str))
+    _HELD_OUT.update(df_test["ev_id"].astype(str))
     encoders = NTSBEncoders(df_train)
     df_test = apply_query_view(df_test, view, a.views_file)
     print(f"Test records: {len(df_test)} | device: {device} | query view: {view}")

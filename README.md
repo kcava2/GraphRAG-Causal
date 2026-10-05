@@ -39,51 +39,65 @@ Concretely the system:
 
 ---
 
-## TL;DR of current state (iteration 2026-09-18, L2 standard since 2026-09-27)
+## TL;DR of current state (L1b standard since 2026-10-04)
 
-Held-out test split, `n = 202`. Balanced accuracy, mean over **5 seeds**, k = 15
-exemplars, four-tier head C, repaired violation labels. Full detail and the list of
-what changed: [CHANGELOG_2026-09-18.md](CHANGELOG_2026-09-18.md).
+What the current pipeline is:
 
-**The standard view is L2.** The test record is looked up by a *preliminary brief*: the
-circumstances of the flight, the kind of event and its sequence, with no injury or
-damage wording and no causal attribution. That is what an analyst holds a few days to
-two weeks after an occurrence. Only the 202 test records are rewritten; training text,
-the exemplar pool, the knowledge graph, the indexes and the labels are untouched.
+- **Head C predicts four unsafe-act tiers** (skill, decision, perception, violation),
+  multi-label, with the violation tier re-labelled under the strict HFACS definition.
+- **Retrieval reads the knowledge graph and nothing else.** Every exemplar is a graph
+  event: ASIAS, ASRS, the older NTSB slice, and the NTSB *training* events, which are
+  written into the graph by `kg_builder.py --ingest-ntsb-train`. A retrieval condition
+  stops with an error if Neo4j cannot be reached. Validation and test events are never
+  in the graph.
+- **k = 15 exemplars**, weighted by real similarity. NTSB events and the other graph
+  events vote separately, and each neighbour carries its outcome on the 0-4 scale.
+- **The standard retrieval view is L1b.** The test record is looked up by a brief of
+  the *circumstances*: operator, aircraft, route, weather, crew, and the phase of flight
+  and what the crew were doing. Not what happened, how it ended, or why. Only the 202
+  test records are rewritten; training text, the graph, the indexes and the labels are
+  untouched, and no retraining is involved.
+- **Comparison views**, one flag away: `--query-view L1` (pre-departure brief, the lower
+  bound), `--query-view L2` (preliminary brief that also names the kind of event; B and
+  C only) and `--query-view full` (the complete narrative, an upper bound).
 
-| head, L2 query | C1 no RAG | **C2 semantic** | C3 structural | C4 hybrid | C5 raw RAG |
+**Caveat that goes with every L1b severity number.** L1b has no outcome wording and
+passes the blocklist, but the phase of flight alone predicts severity at AUC 0.88. A
+head D score under L1b therefore partly reflects recognising the kind of event. L1 is
+the only reduced view under which head D is a clean prediction.
+
+Results of the run of 2026-10-04 (balanced accuracy, 202 test events, 5 seeds, Neo4j
+attached). C is the three error tiers. L1b figures: `results/conditions_summary_L1b.csv`.
+
+**L1b (standard view), after the structural-retrieval redesign of 2026-10-04:**
+
+| head | C1 none | C2 semantic | C3 structural | C4 hybrid | C5 raw |
 |---|---|---|---|---|---|
-| **B** preconditions | 0.514 | **0.596** | 0.526 | 0.546 | 0.535 |
-| **C** unsafe acts, 3 error tiers | 0.525 | **0.671** | 0.536 | 0.663 | 0.642 |
-| **C** incl. violation (2 test positives) | 0.515 | **0.623** | 0.524 | 0.616 | 0.602 |
-| **D** severity | not scored | not scored | not scored | not scored | not scored |
+| B | 0.499 | 0.520 | 0.509 | **0.540** | 0.516 |
+| C | 0.538 | 0.645 | 0.584 | **0.665** | 0.638 |
+| D | 0.568 | 0.743 | 0.696 | 0.734 | 0.750 |
 
-Head D is not scored under L2 because injuries and damage are already known when a
-preliminary report exists, and the L2 text alone predicts severity at AUC 0.95. Scored
-on request (`--include-severity`) C2 reaches 0.883, which measures recognising the kind
-of event, not predicting the outcome.
+Structural retrieval now matches on context groups led by phase of flight (read from
+each event's narrative by `data/derive_phase.py`), not field by field. The full-narrative
+and L1 rows below predate that change for C3 to C5; current values are in `results/`.
 
-**Bounds, C2 semantic (same checkpoints, only the test records' retrieval text changes):**
+| query for the test event | head | C1 none | C2 semantic | C3 structural | C4 hybrid | C5 raw |
+|---|---|---|---|---|---|---|
+| full narrative (upper bound) | B | 0.499 | 0.581 | 0.499 | 0.537 | 0.521 |
+| | C | 0.538 | 0.693 | 0.504 | 0.644 | 0.626 |
+| | D | 0.568 | 0.901 | 0.494 | 0.796 | 0.816 |
+| L1 pre-departure (lower bound) | B | 0.499 | 0.503 | 0.499 | 0.508 | 0.497 |
+| | C | 0.538 | 0.524 | 0.504 | 0.527 | 0.529 |
+| | D | 0.568 | 0.554 | 0.494 | 0.509 | 0.522 |
 
-| query view | B | C, 3 error tiers | D |
-|---|---|---|---|
-| full narrative incl. probable cause (upper bound, retrospective) | 0.597 | 0.700 | 0.899 |
-| **L2 preliminary brief (standard)** | **0.596** | **0.671** | not scored |
-| L1 pre-departure brief (lower bound, passes the severity leakage gate) | 0.507 | 0.513 | 0.559 |
-| C1, no retrieval | 0.514 | 0.525 | 0.569 |
+Read it as: with the full narrative, graph retrieval lifts head C from 0.54 to 0.69 and
+severity to 0.90; with a pre-departure query nothing is predictable, with or without
+retrieval. Structural retrieval (C3) adds nothing in either view. A plain neighbour
+vote over the retrieved graph events ranks the labels as well as the LSTM that reads
+them, so the graph, not the LSTM, carries the result. The strict violation tier has 3
+test positives and cannot be scored.
 
-Read it as three findings. **Head C works now**: 0.53 (kappa 0.02) on the old binary
-target, 0.67 (kappa 0.27) on the three error tiers at L2. **L2 costs little**: moving
-from the full report to the preliminary brief takes head C from 0.70 to 0.67 and leaves
-head B unchanged, so most of what retrieval contributes does not depend on reading the
-outcome or the probable cause. **Nothing is predictable before departure**: with a query
-that reads as a flight that has not happened yet, every head falls to the no-retrieval
-baseline, severity included. Caveats that matter: Neo4j was not running for this run, so
-C3-C5 used the in-distribution structural match only and the KG exemplar path is
-untested; the strict violation tier has 21 positives in the corpus and 2 in the test
-split, so it cannot be scored; severity and the head C tiers are correlated (decision
-errors: 85% of high-severity events, 59% of low), so part of head C's skill is knowing
-the kind of event, which L2 states outright.
+What changed and why: [CHANGELOG_2026-09-18.md](CHANGELOG_2026-09-18.md).
 
 ---
 
@@ -166,10 +180,10 @@ data/
   compare_extractions.py           per-tier prevalence of two extraction runs
   adjudicate_violation.py Stage 2b strict, consensus re-labelling of unsafe_violation
                                    -> violation_adjudication.csv (a label OVERRIDE)
-  build_query_views.py   Stage 6b  L2 (standard) and L1 (lower bound) briefs for the
-                                   TEST split only -> test_query_views.csv
-  leakage_audit.py       Stage 6b  the gate: L2 free of outcome/cause wording, L1 must
-                                   not predict severity
+  build_query_views.py   Stage 6b  L1b (standard), L1 (lower bound) and L2 (comparison)
+                                   briefs for the TEST split only -> test_query_views.csv
+  leakage_audit.py       Stage 6b  the gates: no outcome/cause wording in L1b or L2;
+                                   L1 must not predict severity
   ollama_json.py                   schema-constrained Ollama helper for the two above
   standardize.py         Stage 1   shared vocabulary + strip_outcome() for retrieval text
   hfacs_analysis.py      figures: extraction distributions / co-occurrence / coverage
@@ -181,8 +195,8 @@ models/
   lstm/val.py            single-checkpoint validation-split metrics
   lstm/ensemble.py       Stage 6   RAG-as-a-model, blended at alpha tuned on val
   lstm/eval_conditions.py Stage 6  C1..C5 metrics per head AND per label, bootstrap
-                                   intervals, paired t-tests, --query-view L2|L1|full
-                                   (L2 is the default)
+                                   intervals, paired t-tests, --query-view L1b|L1|L2|full
+                                   (L1b is the default)
   causal_discovery.py    PC algorithm vs the theoretical HFACS DAG
   eval_utils.py          shared plotting for Stage 6
 run_conditions.py        Stage 4   trains C1..C5 across seeds -> results/seeds/
@@ -322,16 +336,19 @@ Balanced enough to be learnable; note it is a *constructed proxy*, not "fatal ac
 
 This is designed in, and worth understanding before you change anything:
 
-- **NTSB never enters the knowledge graph as a retrievable neighbour of itself.**
-  `select_subset.py` writes `ntsb_kg_subset.csv` as the top-scored NTSB records
-  *excluded* from the LSTM subset.
-- **`ntsb.faiss` (few-shot + LOFO) is built from the training split only**
-  ([ntsbdataloader.py](data/ntsbdataloader.py)), so val/test narratives are never
-  retrievable examples.
-- **The in-distribution NTSB retrieval source is leave-one-out.** `LOFORetriever`
-  ([rag_retriever.py](data/rag_retriever.py#L429)) pools the neighbours of a query from
-  the *train* split while excluding the query's own `ev_id`. A training record never
-  sees its own label; a test record is not in the source at all.
+- **Only the NTSB TRAINING split is in the knowledge graph.**
+  `kg_builder.py --ingest-ntsb-train` writes the 710 training events as graph events
+  (source `NTSB`, origin `ntsb_train`) from the committed labels, with no model call.
+  Validation and test events are never written, and the exemplar source refuses to run
+  if it finds one there.
+- **A training event never retrieves itself.** The retriever excludes the query's own
+  event id. A validation or test event is not in the graph at all.
+- **The graph must match the split and the labels.** The ingestion step stores a
+  fingerprint of the train split and its labels; the exemplar source recomputes it and
+  stops with an instruction if they differ. Re-run the ingestion after the labels change.
+- **`ntsb.faiss` is the Stage-2 extraction index, built from the training split only**
+  ([ntsbdataloader.py](data/ntsbdataloader.py)), so labelling a val/test record never
+  puts a val/test example in its prompt. It is not used for retrieval in the model.
 - **ASIAS rows in `lstm_corpus.csv` carry `y_D = -100` (ignore_index)** so they train B
   and C off their narratives but contribute nothing to severity — ASIAS severity is
   gravity-coded and nearly all low, and is trivially separable from NTSB by
@@ -420,10 +437,12 @@ step_ctx (8) : employment_qoq, fuel_qoq, revenue_qoq, loadfactor_qoq,
 step_b   (5) : visual_condition, light_conditions, time_of_day,
                person_involved, pilot_hours_bracket              <- environment / crew
 
-few-shot     : k exemplars x 37 (k = 15), retrieved from the TRAIN split  <- current design
-               [ the 5 features above | y_B(3) | y_C(4) | y_D(2) | causal roles(20)
-                 | has_factor_labels | has_severity | similarity ]
-               encoded by FewShotEncoder -> 32 dims + the 37-dim weighted vote
+few-shot     : k exemplars x 39 (k = 15), retrieved from the KNOWLEDGE GRAPH  <- current design
+               [ the 5 features above | y_B(3) | y_C(4) | y_D(2) | severity ordinal
+                 | causal roles(20) | has_factor_labels | has_severity | in_corpus
+                 | similarity ]
+               encoded by FewShotEncoder -> 32 dims + two 39-dim weighted votes
+               (NTSB events in the graph, and every other graph event)
 
 [legacy]     : precond_prior(3) | unsafe_prior(4) | severity_prior(2) appended to
                step_b — the input-augmentation path used for C4..C8 (see below)
@@ -476,12 +495,12 @@ RETRIEVAL — never in Stage-2 extraction, so `hfacs_results.csv` stays comparab
 **does not achieve its goal**: stripped text still predicts severity at balanced
 accuracy 0.914 versus 0.923 raw. See the severity caveat in the TL;DR.
 
-**Exemplars carry the extracted causal chain.** Each exemplar is 37 dims (the layout
+**Exemplars carry the extracted causal chain.** Each exemplar is 39 dims (the layout
 is defined once, as the `FS_*` slices in `data/ntsbdataloader.py`):
 
 ```
-[ 5 base features | y_B(3) | y_C(4) | y_D(2) | causal roles(20)
-  | has_factor_labels(1) | has_severity(1) | similarity(1) ]
+[ 5 base features | y_B(3) | y_C(4) | y_D(2) | severity ordinal(1) | causal roles(20)
+  | has_factor_labels(1) | has_severity(1) | in_corpus(1) | similarity(1) ]
 ```
 
 The causal block is a role vector over the 10 mined tiers — for each tier, did it act as
@@ -515,14 +534,31 @@ bound together, so the model can learn a locally-weighted mapping instead of a g
 base rate. The prior path is kept in the code because C1–C8 are a published ablation
 and must stay reproducible — it is not the design going forward.
 
-Exemplars are drawn from the **NTSB train split only**, self-excluded, the same
-discipline as `LOFORetriever`. ASIAS/ASRS are deliberately excluded as exemplar sources:
-their label space differs (ASIAS severity is `ignore_index`), so exemplars from them
-would teach the model from labels it is never scored on.
+Exemplars are drawn from the **knowledge graph only**. The graph holds four kinds of
+event, and all of them compete on similarity alone, with no per-source weights or
+quotas:
 
-Any retrieval failure (Neo4j down, FAISS missing, bad Cypher) degrades silently —
-uniform priors on the legacy path, zero-filled and masked-out exemplars on the few-shot
-path. Training never breaks, which means **a silent failure looks like a working run**.
+| in the graph | events | outcome on record | role |
+|---|---|---|---|
+| NTSB training events | 710 | all, 43% high severity | labels match the prediction targets |
+| ASIAS | 1000 | 701, all low | context, causal roles, labels from the KG prompt |
+| ASRS | 942 | 905, all low (derived from the `result` field) | same |
+| older NTSB slice | 100 | all, 68% high | same |
+
+Because the two label sets differ so much (operator preconditions: 72% of NTSB events,
+6% of ASIAS events), the encoder takes one neighbour vote over the NTSB training events
+and a separate one over everything else, and the model learns how far to trust each.
+
+From 1 September to 3 October 2026 the exemplars did NOT come from the graph: the
+training records were held in an in-memory pool beside it and ranked above every graph
+match, so structural retrieval used the graph for none of its neighbours and hybrid for
+about one in twelve. That pool is gone.
+
+A retrieval failure on the exemplar path (Neo4j down, password unset, index missing,
+graph out of date) now **raises** and the condition is reported as FAILED. It used to
+return a zero-filled, masked-out block, which trains without complaint: **a silent
+failure looked like a working run**. The legacy prior path still degrades to uniform
+priors.
 The dataloader prints per-record coverage for both (`RAG priors non-uniform: …` and
 `Few-shot exemplars: n/N records got >=1`). Watch those lines; they are the honest
 measure of whether retrieval is carrying anything.
@@ -626,18 +662,23 @@ python data/kg_builder.py --faiss-only
 #   override on top of hfacs_results.csv. HFACS_VIOLATION_OVERRIDE=0 ignores it.
 python data/adjudicate_violation.py
 
-# Stage 4/6 - train and evaluate the five conditions (5 seeds each, ~45 min on CPU)
+# Stage 3b - put the NTSB TRAINING events into the graph (no LLM, about a minute).
+#   run_all.py stage 8 does this. Run it by hand after any change to the labels or
+#   the split; the retrieval conditions refuse to run on a graph that is out of date.
+python data/kg_builder.py --ingest-ntsb-train
+
+# Stage 4/6 - train and evaluate the five conditions (5 seeds each). C2-C5 need Neo4j
+#   running and NEO4J_PASSWORD set: they read the graph and stop without it.
 python run_conditions.py --epochs 500 --seeds 0 1 2 3 4      # k = 15 exemplars
 
 # Stage 6b - what the TEST record is allowed to know. Rewrites the retrieval text of
 #   the 202 test records only; nothing is retrained and no index is rebuilt.
-python data/build_query_views.py          # L2 preliminary (standard) + L1 pre-departure
-python data/leakage_audit.py              # gate, exit 2 = FAIL
-python models/lstm/eval_conditions.py                       # L2, the standard view
-python models/lstm/eval_conditions.py --query-view L1       # lower bound
-python models/lstm/eval_conditions.py --query-view full     # upper bound (retrospective)
-#   optional: --include-severity scores head D under L2 (not a prediction, see TL;DR)
-#   optional diagnostic: build_query_views.py --tiers L1b ; eval --query-view L1b
+python data/build_query_views.py          # L1b (standard), L1 and L2 briefs
+python data/leakage_audit.py              # gates, exit 2 = FAIL
+python models/lstm/eval_conditions.py                       # L1b, the standard view
+python models/lstm/eval_conditions.py --query-view L1        # lower bound
+python models/lstm/eval_conditions.py --query-view L2        # comparison (B and C)
+python models/lstm/eval_conditions.py --query-view full      # upper bound (retrospective)
 
 #   subset / quick check
 python run_conditions.py --only C1 C2 --seeds 0 --epochs 120

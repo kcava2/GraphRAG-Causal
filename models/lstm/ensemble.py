@@ -42,7 +42,7 @@ from torch.utils.data import DataLoader
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 from data.ntsbdataloader import (  # noqa: E402
-    NTSBSequenceDataset, NTSBEncoders, FewShotSource, load_and_join, _split,
+    NTSBSequenceDataset, NTSBEncoders, GraphFewShotSource, load_and_join, _split,
     STEP_B_BASE, N_B, N_C, NTSB_CLEAN, exemplar_vote)
 from models.lstm.train import make_model  # noqa: E402
 from models.lstm.eval import ml_metrics, class_metrics  # noqa: E402
@@ -178,7 +178,14 @@ def main():
 
     # The checkpoint may or may not have been trained with exemplars; the RAG
     # predictor needs them either way, so the source is always built.
-    src = FewShotSource(df_train, encoders)
+    # The retrieval-only predictor reads the knowledge graph, like every other
+    # retrieval path. (It used to read an in-memory pool of training records.)
+    from rag_retriever import build_retriever
+    retr = build_retriever(strategy="faiss", k=a.fewshot_k)
+    retr.require_graph()
+    src = GraphFewShotSource(retr)
+    held_out = set(df_val["ev_id"].astype(str)) | set(df_test["ev_id"].astype(str))
+    src.attach_encoders(encoders, df_train, forbidden_ids=held_out)
     k_model = a.fewshot_k if cfg.get("fewshot_dim", 0) > 0 else 0
     k_rag = a.fewshot_k
 

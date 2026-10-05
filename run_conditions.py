@@ -29,7 +29,10 @@ gap between conditions — so single runs cannot distinguish them.
     python run_conditions.py --only C1 C2 --seeds 0   # quick subset
     python run_conditions.py --baseline               # degenerate diagnostic
 
-Needs Neo4j for C3/C4/C5 (structural retrieval) and data/*.faiss for C2/C4.
+Every retrieval condition (C2-C5) reads the Neo4j knowledge graph and nothing else,
+so Neo4j must be running with NEO4J_PASSWORD set; without it they stop with an error
+instead of training on something else. The graph must also hold the NTSB training
+events:  python data/kg_builder.py --ingest-ntsb-train  (run_all.py stage 8 does it).
 Writes results/seeds/c{n}_s{seed}.pt, then run models/lstm/eval_conditions.py.
 """
 
@@ -61,17 +64,21 @@ CONDITIONS = {
 }
 
 
-def build_source(strategy, raw_mode, k, kg_factor_labels=False):
+def build_source(strategy, raw_mode, k, kg_factor_labels=True):
     """GraphFewShotSource for a retrieval condition; None for C1.
 
     `k` is handed to the retriever as well as to the dataset. It used to go only
     to the dataset, and the retriever kept its own default of 5, so any
     `--fewshot-k` above 5 produced exactly the same exemplars as 5.
+
+    The graph is checked here, before any data is built: a retrieval condition
+    with no graph is an error, not a degraded run.
     """
     if strategy is None:
         return None, None
     from data.rag_retriever import build_retriever
     retr = build_retriever(strategy=strategy, k=k)
+    retr.require_graph()
     return GraphFewShotSource(retr, raw_mode=raw_mode,
                               kg_factor_labels=kg_factor_labels), retr
 
@@ -93,9 +100,10 @@ def run_condition(name, args, device):
     print("=" * 68)
 
     k = 0 if strategy is None else args.fewshot_k
-    source, retr = build_source(strategy, raw_mode, k, args.kg_factor_labels)
     gate = {}
+    retr = None
     try:
+        source, retr = build_source(strategy, raw_mode, k, not args.no_kg_factor_labels)
         train_loader, val_loader, _test, encoders = get_dataloaders(
             filepath=args.input, batch_size=args.batch_size,
             retriever=None,                  # priors OFF — exemplars are the mechanism
@@ -130,7 +138,7 @@ def run_condition(name, args, device):
                 baseline=args.baseline, seed=seed, verbose=False)
             config.update(condition=name, strategy=strategy,
                           raw_mode=raw_mode, seed=seed,
-                          kg_factor_labels=bool(args.kg_factor_labels), gate=gate)
+                          kg_factor_labels=not args.no_kg_factor_labels, gate=gate)
             payload = {"state_dict": model.state_dict(), "config": config,
                        "thresholds": thresholds, "history": history}
             torch.save(payload, os.path.join(SEED_DIR, f"{name.lower()}_s{seed}.pt"))
@@ -152,10 +160,11 @@ def main():
                     help="Exemplars retrieved per record for C2-C5. 15 was chosen on "
                          "the validation retrieval gate: the rare unsafe-act tiers "
                          "need more than 5 neighbours before a positive shows up.")
-    ap.add_argument("--kg-factor-labels", action="store_true",
-                    help="Let ASIAS/ASRS knowledge-graph neighbours vote on heads B "
-                         "and C. Off by default: their HFACS factors were mined under "
-                         "a different prompt and their base rates do not match NTSB.")
+    ap.add_argument("--no-kg-factor-labels", action="store_true",
+                    help="Ablation: hide the HFACS labels of the non-corpus graph events "
+                         "(ASIAS, ASRS, the older NTSB slice), so only the NTSB training "
+                         "events in the graph vote on heads B and C. By default every "
+                         "graph event votes, each kind in its own vote.")
     ap.add_argument("--epochs", type=int, default=500)
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--hidden-size", type=int, default=128)

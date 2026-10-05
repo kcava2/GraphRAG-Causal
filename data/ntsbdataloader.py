@@ -225,6 +225,18 @@ def load_and_join(filepath: str = NTSB_CLEAN,
     df["_pre"] = [s[2] for s in sets]
     df["_uns"] = _apply_violation_override(df["ev_id"], [s[3] for s in sets])
 
+    # Phase of flight, read from each record's own full narrative by
+    # data/derive_phase.py. Used ONLY as a structural-retrieval query field. Test
+    # records are re-assigned the phase of their query view at evaluation time
+    # (eval_conditions.apply_query_view): an L1 query has none.
+    phase_path = os.path.join(_HERE, "event_phase.csv")
+    if os.path.exists(phase_path):
+        ph = pd.read_csv(phase_path, dtype=str)
+        ph = ph[ph["origin"] == "NTSB-corpus"].set_index("key")["phase"]
+        df["phase_of_flight"] = df["ev_id"].astype(str).map(ph).fillna("unknown")
+    else:
+        df["phase_of_flight"] = "unknown"
+
     sev = pd.to_numeric(df["severity_class"], errors="coerce")
     df = df[sev.notna()].reset_index(drop=True)
     # Binarize severity -> high(1)/low(0). The cleaned data has injury-COUNT
@@ -345,15 +357,30 @@ def causal_roles(edges) -> np.ndarray:
 
 # Exemplar row layout — ONE definition, read by the sources here and by the encoder:
 #
-#   [ base (5) | y_B (3) | y_C (4) | y_D one-hot (2) | causal roles (20)
-#     | has_factor_labels (1) | has_severity (1) | similarity (1) ]
+#   [ base (5) | y_B (3) | y_C (4) | y_D one-hot (2) | severity ordinal (1)
+#     | causal roles (20) | has_factor_labels (1) | has_severity (1)
+#     | in_corpus (1) | similarity (1) ]
+#
+# Every exemplar is an event in the knowledge graph.
 #
 # The two `has_*` flags say whether a label block is KNOWN for this neighbour. They
-# exist because "no label" and "label is zero" used to be the same bytes: an ASRS
-# event with no injury data, or a KG event whose HFACS factors were mined by a
-# different prompt, showed up as an all-zero block and was averaged into the
-# neighbour vote as a confident negative. With the flag the vote for a block is
+# exist because "no label" and "label is zero" used to be the same bytes: an event
+# with no outcome on record showed up as an all-zero block and was averaged into
+# the neighbour vote as a confident negative. With the flag the vote for a block is
 # taken over the neighbours that actually carry it.
+#
+# `severity ordinal` is the neighbour's outcome on the 0-4 gravity scale, divided
+# by 4. The one-hot beside it only says high or low; the ordinal keeps the rest
+# (no harm / minor / substantial damage / serious injury / fatal or destroyed), so
+# the model is handed all the outcome information the graph holds.
+#
+# `in_corpus` is 1 for an NTSB training event in the graph, whose labels come from
+# the same extraction as the prediction targets, and 0 for every other graph event
+# (ASIAS, ASRS, the older NTSB slice), labelled by the KG builder's own prompt.
+# The two kinds are not averaged together: the encoder takes one vote over each.
+# Their base rates differ too much to mix (operator preconditions: 72% of NTSB
+# events, 6% of ASIAS events), and a single mixed vote would mostly measure which
+# kind of neighbour was retrieved.
 #
 # `similarity` is the retrieval score on an ABSOLUTE scale (cosine, or the matched
 # share of structured context). It used to be min-max normalised across the k
@@ -363,11 +390,31 @@ FS_BASE = slice(0, STEP_B_BASE)
 FS_B = slice(FS_BASE.stop, FS_BASE.stop + N_B)
 FS_C = slice(FS_B.stop, FS_B.stop + N_C)
 FS_D = slice(FS_C.stop, FS_C.stop + 2)
-FS_CAUSAL = slice(FS_D.stop, FS_D.stop + CAUSAL_DIM)
+FS_SEV_ORD = FS_D.stop
+FS_CAUSAL = slice(FS_SEV_ORD + 1, FS_SEV_ORD + 1 + CAUSAL_DIM)
 FS_HAS_BC = FS_CAUSAL.stop
 FS_HAS_D = FS_HAS_BC + 1
-FS_SIM = FS_HAS_D + 1
+FS_IN_CORPUS = FS_HAS_D + 1
+FS_SIM = FS_IN_CORPUS + 1
 FEWSHOT_DIM = FS_SIM + 1
+SEVERITY_ORDINAL_MAX = 4.0
+
+
+def ntsb_train_signature(df_train: pd.DataFrame) -> str:
+    """Fingerprint of the training split AND its labels.
+
+    The NTSB training events live in the knowledge graph. If the split or the
+    labels change and the graph is not refreshed, retrieval would hand the model
+    neighbours carrying stale labels and nothing would look wrong. The ingestion
+    step stores this fingerprint in the graph; the exemplar source recomputes it
+    and refuses to run on a mismatch.
+    """
+    import hashlib
+    h = hashlib.sha1()
+    d = df_train.assign(_k=df_train["ev_id"].astype(str)).sort_values("_k")
+    for ev, pre, uns, sev in zip(d["_k"], d["_pre"], d["_uns"], d["severity_class"]):
+        h.update(f"{ev}|{','.join(sorted(pre))}|{','.join(sorted(uns))}|{sev}\n".encode())
+    return h.hexdigest()
 
 
 def _exemplar_matrix(df: pd.DataFrame, encoders: "NTSBEncoders",
@@ -385,9 +432,11 @@ def _exemplar_matrix(df: pd.DataFrame, encoders: "NTSBEncoders",
     mat[:, FS_C] = np.stack([_multihot(s, UNSAFE_SUBS) for s in df["_uns"]])
     y_D = pd.to_numeric(df["severity_class"], errors="coerce").fillna(0).astype(int).to_numpy()
     mat[:, FS_D] = np.eye(2, dtype="float32")[np.clip(y_D, 0, 1)]
+    mat[:, FS_SEV_ORD] = np.where(y_D > 0, 3.5, 1.0) / SEVERITY_ORDINAL_MAX   # binary only here
     mat[:, FS_CAUSAL] = _train_causal_roles(df)
     mat[:, FS_HAS_BC] = 1.0
     mat[:, FS_HAS_D] = 1.0
+    mat[:, FS_IN_CORPUS] = 1.0
     if raw_mode:
         mat[:, FS_B] = 0.0
         mat[:, FS_C] = 0.0
@@ -399,7 +448,14 @@ def _exemplar_matrix(df: pd.DataFrame, encoders: "NTSBEncoders",
 
 
 class FewShotSource:
-    """Retrieves labelled EXEMPLARS — (features, labels) pairs — for a query.
+    """LEGACY — not used by run_conditions.py or eval_conditions.py.
+
+    This source retrieves from an in-memory pool of TRAINING records, not from the
+    knowledge graph. The experiment's retrieval conditions read the graph only
+    (`GraphFewShotSource`); this class is kept for the single-checkpoint scripts
+    that predate that decision and should not be used for a reported result.
+
+    Retrieves labelled EXEMPLARS — (features, labels) pairs — for a query.
 
     This is the neural analogue of few-shot prompting: rather than collapsing the
     neighbours into an averaged prior (what `_retrieve_priors` does), each
@@ -494,95 +550,114 @@ def _train_causal_roles(df: pd.DataFrame) -> np.ndarray:
 
 
 class GraphFewShotSource:
-    """Few-shot exemplars retrieved from the KNOWLEDGE GRAPH (spec 2.2 A/B/C).
+    """Few-shot exemplars retrieved from the KNOWLEDGE GRAPH, and only from it.
 
-    Same exemplar layout as `FewShotSource`, but the neighbours come from
-    `RAGRetriever` under a chosen strategy, so the retrieval STRATEGY becomes the
-    experimental variable:
+    The neighbours come from `RAGRetriever` under a chosen strategy, so the
+    retrieval STRATEGY is the experimental variable:
 
         faiss   -> Strategy A, semantic  (narrative similarity)
         cypher  -> Strategy B, structural (shared context nodes)
-        hybrid  -> Strategy C, 50/50 combination
+        hybrid  -> Strategy C, the mean of the two
 
-    Each neighbour is one exemplar row: its context features from the graph, its
-    HFACS tiers as y_B/y_C, its stored severity as y_D, and its retrieval score.
-    All event attributes are pulled once (`event_attributes`) and looked up
-    locally — per-neighbour queries would be thousands of round-trips.
+    Each neighbour is one exemplar row built from what the graph stores about that
+    event: its context nodes, its HFACS factor tiers as y_B/y_C, its extracted
+    causal chain, its severity, and the retrieval score. All event attributes are
+    pulled from Neo4j once (`event_attributes`) and looked up locally —
+    per-neighbour queries would be thousands of round-trips.
 
-    Missing data is encoded, not dropped. ASRS carries no injury data, so its
-    severity one-hot is left all-zeros — distinct from a real [1,0]/[0,1] — and
-    a neighbour missing a context feature gets that feature's "Unknown" code.
+    There is no second pool. Until October 2026 this class also held the training
+    records in memory and ranked them above the graph, so in practice most
+    exemplars never came from the graph at all (none, under structural retrieval).
+    The training events now live IN the graph, written by
+    `kg_builder.py --ingest-ntsb-train`, and are retrieved like any other event.
 
-    `raw_mode=True` zeroes the y_B/y_C columns and keeps only severity: the
-    exemplar equivalent of `--no-factor-priors`, i.e. retrieval with the
-    LLM-mined content removed (condition C5).
+    Leakage discipline, enforced in `attach_encoders`:
+      * validation and test events must not be in the graph (`forbid`);
+      * the graph's training events must be exactly the current train split with
+        the current labels (signature check);
+      * a training event never retrieves itself (the retriever excludes the
+        query's own id).
+
+    Missing data is encoded, not dropped: an event with no outcome on record has
+    has_severity = 0, and a missing context feature gets its "Unknown" code.
+
+    `kg_factor_labels=False` marks the B/C labels of the non-corpus events (ASIAS,
+    ASRS, the older NTSB slice) as unknown, so only training events vote on B and
+    C. They vote in their own block either way; this is an ablation switch.
+
+    `raw_mode=True` removes every LLM-mined column (labels and causal roles) from
+    every exemplar and keeps severity: retrieval with the text mining taken out
+    (condition C5).
     """
 
     def __init__(self, retriever, raw_mode: bool = False,
-                 kg_factor_labels: bool = False):
+                 kg_factor_labels: bool = True):
         self.retriever = retriever
         self.raw_mode = raw_mode
-        # KG events (ASIAS/ASRS) had their HFACS factors mined by kg_builder under
-        # a different prompt, and their base rates do not match the NTSB targets
-        # (see attach_encoders). By default those B/C labels are therefore marked
-        # UNKNOWN: the neighbour still contributes its context, causal roles,
-        # severity and similarity, but does not vote on B or C. Pass True to let
-        # them vote (the behaviour before this flag existed).
         self.kg_factor_labels = kg_factor_labels
         self._rows = {}
+        self.composition = {}
 
-    def attach_encoders(self, encoders: "NTSBEncoders", source_df: pd.DataFrame = None):
-        """Build the exemplar rows. Deferred because the encoders are fit on the
-        train split inside get_dataloaders, after this source is constructed.
+    def attach_encoders(self, encoders: "NTSBEncoders", source_df: pd.DataFrame = None,
+                        forbidden_ids=None):
+        """Build the exemplar rows from the graph. Deferred because the encoders are
+        fit on the train split inside get_dataloaders, after this source exists.
 
-        When `source_df` (the TRAIN split) is given, it is also registered on the
-        retriever as the in-distribution LOFO source and its records become
-        exemplars in their own right. This matters more than anything else here:
-        KG exemplars are mined from ASIAS/ASRS by `kg_builder` with a different
-        prompt, so their label distribution does not match the NTSB targets —
-
-            precond_operator     KG 16.2%   vs   NTSB target 71.7%
-            precond_situational  KG 43.5%   vs   NTSB target 20.6%
-
-        For head D that mismatch is survivable, because severity is a structured
-        field computed the same way for every source. For B and C, whose labels are
-        LLM-mined, KG exemplars are actively misleading. Train-split exemplars carry
-        exactly the target distribution, and LOFO self-exclusion keeps them honest:
-        a record never retrieves itself, and val/test records are not in the pool.
+        `source_df` is the TRAIN split. It is NOT used as a retrieval pool. It is
+        used to check that the graph's NTSB training events are this split with
+        these labels. `forbidden_ids` are the validation and test event ids, which
+        must be absent from the graph.
         """
         if self._rows:
             return                                             # already built
-        attrs = self.retriever.event_attributes() if self.retriever is not None else {}
+        if self.retriever is None:
+            raise RuntimeError("GraphFewShotSource needs a retriever.")
+        attrs = self.retriever.event_attributes()              # raises if no graph
+        in_graph = {eid for (eid, src), a in attrs.items()
+                    if a.get("origin") == "ntsb_train"}
+
+        if forbidden_ids is not None:
+            leak = sorted({str(i) for i in forbidden_ids}
+                          & {eid for (eid, src) in attrs if src == "NTSB"})
+            if leak:
+                raise RuntimeError(
+                    f"{len(leak)} validation/test events are in the knowledge graph "
+                    f"(first: {leak[:3]}). Retrieval would hand the model their labels. "
+                    "Re-run:  python data/kg_builder.py --ingest-ntsb-train")
+
+        if source_df is not None:
+            train_ids = set(source_df["ev_id"].astype(str))
+            fix = "Run:  python data/kg_builder.py --ingest-ntsb-train"
+            if not in_graph:
+                raise RuntimeError(
+                    "The knowledge graph holds no NTSB training events, so retrieval "
+                    "would see incident reports only and almost no outcome "
+                    f"information. {fix}")
+            if in_graph != train_ids:
+                raise RuntimeError(
+                    f"The graph's NTSB training events ({len(in_graph)}) are not the "
+                    f"current train split ({len(train_ids)}; "
+                    f"{len(train_ids - in_graph)} missing, {len(in_graph - train_ids)} "
+                    f"extra). {fix}")
+            meta = self.retriever.graph_meta()
+            if meta.get("signature") != ntsb_train_signature(source_df):
+                raise RuntimeError(
+                    "The labels of the NTSB training events in the graph are out of "
+                    "date (they were written before the labels last changed, on "
+                    f"{meta.get('updated', 'an unknown date')}). {fix}")
+
         for key, a in attrs.items():
             self._rows[key] = self._build_row(a, encoders)
-        n_kg = len(self._rows)
 
-        n_train = 0
-        if source_df is not None and self.retriever is not None:
-            if hasattr(self.retriever, "set_source_df"):
-                self.retriever.set_source_df(source_df)        # activates LOFO
-            n_train = self._add_train_rows(source_df, encoders)
-
-        n_sev = sum(1 for r in self._rows.values() if r[FS_HAS_D] > 0)
-        n_lab = sum(1 for r in self._rows.values() if r[FS_HAS_BC] > 0)
-        print(f"  Graph few-shot source: {n_kg} KG events + {n_train} in-distribution "
-              f"train records ({n_sev} with severity, {n_lab} voting on B/C)"
-              f"{' [raw mode: no factor labels]' if self.raw_mode else ''}.")
-
-    def _add_train_rows(self, df: pd.DataFrame, e: "NTSBEncoders") -> int:
-        """Exemplar rows for the NTSB train split, keyed to match LOFO's output.
-
-        `LOFORetriever` returns neighbours as (ev_id, "NTSB"), so these are keyed
-        the same way. The 100 NTSB-KG events already in `_rows` come from the
-        disjoint `ntsb_kg_subset`, so there is no id collision.
-        """
-        df = df.reset_index(drop=True)
-        # Same builder as FewShotSource, so both sources encode a train record
-        # identically. raw_mode (C5) strips every LLM-mined column.
-        mat = _exemplar_matrix(df, e, raw_mode=self.raw_mode)
-        for i, ev in enumerate(df["ev_id"].astype(str)):
-            self._rows[(ev, "NTSB")] = mat[i]
-        return len(df)
+        uni = self.retriever._universe()
+        self.composition = dict(uni.get("by_source", {}))
+        n_sev = sum(1 for k in uni["keys"] if self._rows[k][FS_HAS_D] > 0)
+        n_hi = sum(1 for k in uni["keys"] if self._rows[k][FS_D.start + 1] > 0)
+        n_lab = sum(1 for k in uni["keys"] if self._rows[k][FS_HAS_BC] > 0)
+        print(f"  Graph few-shot source: {len(uni['keys'])} retrievable graph events "
+              f"{self.composition}; {n_sev} with a known outcome ({n_hi} high severity), "
+              f"{n_lab} voting on B/C"
+              f"{' [raw mode: no mined content]' if self.raw_mode else ''}.")
 
     def _build_row(self, a: dict, e: "NTSBEncoders") -> np.ndarray:
         from standardize import binarize_severity
@@ -596,9 +671,14 @@ class GraphFewShotSource:
         row[3] = one(e.enc_person, ctx.get("person_involved", "Unknown"))
         row[4] = one(e.enc_pilot_hours, ctx.get("pilot_hours_bracket", "Unknown"))
 
+        in_corpus = a.get("origin") == "ntsb_train"
+        row[FS_IN_CORPUS] = 1.0 if in_corpus else 0.0
+
         tiers = a.get("tiers", []) or []
         if not self.raw_mode:                                  # LLM-mined content
-            if tiers and self.kg_factor_labels:
+            # A training event always has its labels (an empty tier set is a real
+            # "none"). Any other event votes only if it has factors at all.
+            if in_corpus or (tiers and self.kg_factor_labels):
                 for t in tiers:
                     gi = PRECOND_GROUP_INDEX.get(t)
                     if gi is not None:
@@ -608,12 +688,14 @@ class GraphFewShotSource:
                 row[FS_HAS_BC] = 1.0                           # labels known
             row[FS_CAUSAL] = causal_roles(a.get("causal"))     # extracted chain
 
-        sev = a.get("severity")                                # structured outcome
+        sev = a.get("severity")                                # recorded outcome
         if sev is not None:
             try:
                 b = binarize_severity(sev)
                 if b is not None and 0 <= int(b) < 2:
                     row[FS_D.start + int(b)] = 1.0
+                    row[FS_SEV_ORD] = min(max(float(sev), 0.0), SEVERITY_ORDINAL_MAX) \
+                        / SEVERITY_ORDINAL_MAX
                     row[FS_HAS_D] = 1.0
             except Exception:
                 pass                                           # flag stays 0 = unknown
@@ -626,16 +708,15 @@ class GraphFewShotSource:
             self.retriever.warm(texts)
 
     def lookup(self, record: dict, k: int):
-        """-> (exemplars [k, FEWSHOT_DIM], mask [k]) from the graph."""
+        """-> (exemplars [k, FEWSHOT_DIM], mask [k]). Every row is a graph event.
+
+        A failure to read the graph raises. It used to return an empty, masked-out
+        block, which trains without complaint and looks exactly like a working run.
+        """
         out = np.zeros((k, FEWSHOT_DIM), dtype="float32")
         mask = np.zeros(k, dtype="float32")
-        if self.retriever is None:
-            return out, mask
         used = 0
-        # Ask for more candidates than slots. A neighbour with no exemplar row (a KG
-        # event when Neo4j is down, say) used to consume a slot and leave the record
-        # short of exemplars without any message.
-        for key, score in self.retriever.ranked_neighbors(record, k=k, fetch=3 * k):
+        for key, score in self.retriever.ranked_neighbors(record, k=k, fetch=k):
             row = self._rows.get(key)
             if row is None:
                 continue
@@ -648,6 +729,9 @@ class GraphFewShotSource:
         return out, mask
 
 
+# ---------------------------------------------------------------------------
+# Dataset
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
@@ -764,7 +848,8 @@ class NTSBSequenceDataset(Dataset):
     _RETRIEVE_COLS = ["ev_id", "combined_text", "visual_condition", "light_conditions",
                       "employment_bracket", "fuel_bracket", "revenue_bracket",
                       "loadfactor_bracket", "person_involved", "pilot_hours_bracket",
-                      "acft_make", "year"]   # ev_id -> LOFO self-exclusion; make/year -> SDR
+                      "acft_make", "year",   # ev_id -> self-exclusion; make/year -> SDR
+                      "phase_of_flight"]     # structural retrieval (view-dependent at test)
 
     def _retrieve_priors(self, retriever, df, encoders):
         """RAG priors over Preconditions (n_B), Unsafe Acts (n_C), and Severity
@@ -814,16 +899,24 @@ class NTSBSequenceDataset(Dataset):
 # Retrieval gate — does the exemplar block carry anything, before any training?
 # ---------------------------------------------------------------------------
 
-def exemplar_vote(fewshot: np.ndarray, mask: np.ndarray, tau: float = 0.1) -> dict:
+def exemplar_vote(fewshot: np.ndarray, mask: np.ndarray, tau: float = 0.1,
+                  group: str = "all") -> dict:
     """Similarity-weighted neighbour vote per head, straight from an exemplar block.
 
-    Mirrors `FewShotEncoder`'s vote: softmax(similarity / tau) over the real
-    neighbours, and each label block averaged only over neighbours whose labels
-    are KNOWN (the has_* flags). Returns {'B': [n,N_B], 'C': [n,N_C], 'D': [n]}.
+    Mirrors `FewShotEncoder`'s vote: softmax(similarity / tau) over the neighbours
+    in `group`, and each label block averaged only over neighbours whose labels are
+    KNOWN (the has_* flags). `group` is 'corpus' (NTSB training events in the
+    graph), 'other' (every other graph event) or 'all'.
+    Returns {'B': [n,N_B], 'C': [n,N_C], 'D': [n], 'n': [n] neighbours used}.
     """
+    member = mask > 0
+    if group == "corpus":
+        member = member & (fewshot[..., FS_IN_CORPUS] > 0)
+    elif group == "other":
+        member = member & (fewshot[..., FS_IN_CORPUS] <= 0)
     sim = fewshot[..., FS_SIM]
-    logit = np.where(mask > 0, sim / tau, -1e9)
-    w = np.exp(logit - logit.max(1, keepdims=True)) * (mask > 0)
+    logit = np.where(member, sim / tau, -1e9)
+    w = np.exp(logit - logit.max(1, keepdims=True)) * member
     w = w / np.clip(w.sum(1, keepdims=True), 1e-9, None)
 
     def block(sl, flag):
@@ -831,44 +924,62 @@ def exemplar_vote(fewshot: np.ndarray, mask: np.ndarray, tau: float = 0.1) -> di
         return (fewshot[..., sl] * wf[..., None]).sum(1) / np.clip(
             wf.sum(1, keepdims=True), 1e-9, None)
     d = block(FS_D, FS_HAS_D)
-    return {"B": block(FS_B, FS_HAS_BC), "C": block(FS_C, FS_HAS_BC), "D": d[:, 1]}
+    return {"B": block(FS_B, FS_HAS_BC), "C": block(FS_C, FS_HAS_BC), "D": d[:, 1],
+            "n": member.sum(1)}
 
 
 def retrieval_gate(dataset: "NTSBSequenceDataset", name: str = "val") -> dict:
-    """Print and return the exemplar vote's AUC per label on `dataset`.
+    """Print and return what the retrieved graph events can do on their own.
 
-    This is the honest measure of whether retrieval can help a head at all. The
-    vote is a fixed function of the exemplar block — no weights, no training — so
-    if it cannot rank a label, no architecture reading the same block will. It
-    is also where a silent retrieval failure shows up: coverage can read 100%
-    while every neighbour is uninformative.
+    The vote is a fixed function of the exemplar block — no weights, no training —
+    so if it cannot rank a label, no architecture reading the same block will. It
+    is also where a quiet retrieval problem shows up: coverage can read 100% while
+    every neighbour is uninformative.
+
+    Three lines: the vote over ALL retrieved graph events, over the NTSB training
+    events among them, and over the other graph events (ASIAS, ASRS, older NTSB).
+    The last two are what the model actually receives, as separate inputs.
     """
     from sklearn.metrics import roc_auc_score
     if dataset.fewshot.shape[1] == 0:
         return {}
-    v = exemplar_vote(dataset.fewshot.numpy(), dataset.fewshot_mask.numpy())
-    out = {}
+    fs, mk = dataset.fewshot.numpy(), dataset.fewshot_mask.numpy()
+    yd = dataset.y_D.numpy()
+    md = yd != -100
 
     def auc(y, p):
-        return float(roc_auc_score(y, p)) if 0 < y.sum() < len(y) else float("nan")
-    for j, g in enumerate(PRECOND_SUBS):
-        out[f"B:{g.replace('precond_', '')}"] = auc(dataset.y_B[:, j].numpy(), v["B"][:, j])
-    for j, t in enumerate(UNSAFE_SUBS):
-        out[f"C:{t.replace('unsafe_', '')}"] = auc(dataset.y_C[:, j].numpy(), v["C"][:, j])
-    yd = dataset.y_D.numpy()
-    m = yd != -100
-    out["D:severity"] = auc(yd[m], v["D"][m])
-    sim = dataset.fewshot[..., FS_SIM].numpy()
-    msk = dataset.fewshot_mask.numpy() > 0
-    out["_mean_similarity"] = float(sim[msk].mean()) if msk.any() else float("nan")
-    out["_mean_exemplars"] = float(msk.sum(1).mean())
-    print(f"  Retrieval gate [{name}] vote AUC: "
-          + "  ".join(f"{k} {a:.3f}" for k, a in out.items() if not k.startswith("_"))
-          + f"  | mean similarity {out['_mean_similarity']:.3f}, "
-            f"exemplars/record {out['_mean_exemplars']:.1f}")
+        return float(roc_auc_score(y, p)) if 0 < y.sum() < len(y) and np.ptp(p) > 0 \
+            else float("nan")
+    out = {}
+    real = mk > 0
+    share = float((fs[..., FS_IN_CORPUS][real] > 0).mean()) if real.any() else float("nan")
+    out["_mean_similarity"] = float(fs[..., FS_SIM][real].mean()) if real.any() else float("nan")
+    out["_mean_exemplars"] = float(real.sum(1).mean())
+    out["_share_ntsb_train"] = share
+    out["_share_with_outcome"] = float((fs[..., FS_HAS_D][real] > 0).mean()) if real.any() \
+        else float("nan")
+    print(f"  Retrieval gate [{name}]: {out['_mean_exemplars']:.1f} graph events per record, "
+          f"mean similarity {out['_mean_similarity']:.3f}; {share:.0%} NTSB training events, "
+          f"{1 - share:.0%} other graph events; {out['_share_with_outcome']:.0%} carry an outcome.")
+    for group, label in (("all", "all graph neighbours"), ("corpus", "NTSB events in graph"),
+                         ("other", "other graph events ")):
+        v = exemplar_vote(fs, mk, group=group)
+        res = {}
+        for j, g in enumerate(PRECOND_SUBS):
+            res[f"B:{g.replace('precond_', '')}"] = auc(dataset.y_B[:, j].numpy(), v["B"][:, j])
+        for j, t in enumerate(UNSAFE_SUBS):
+            res[f"C:{t.replace('unsafe_', '')}"] = auc(dataset.y_C[:, j].numpy(), v["C"][:, j])
+        res["D:severity"] = auc(yd[md], v["D"][md])
+        for k_, a_ in res.items():
+            out[k_ if group == "all" else f"{group}|{k_}"] = a_
+        print(f"      vote AUC, {label}: "
+              + "  ".join(f"{k_} {a_:.3f}" for k_, a_ in res.items()))
     return out
 
 
+# ---------------------------------------------------------------------------
+# FAISS index (training split only) — built once, read-only afterward
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # FAISS index (training split only) — built once, read-only afterward
 # ---------------------------------------------------------------------------
@@ -951,13 +1062,19 @@ def get_dataloaders(filepath: str = NTSB_CLEAN, test_split=0.2, val_split=0.1,
     # semantic source. Either way it is built once and shared, so val/test query
     # the same pool the model trained against.
     if fewshot_k > 0 and fewshot_source is None:
-        fewshot_source = FewShotSource(df_train, encoders)
+        # Exemplars come from the knowledge graph. There is no in-memory fallback:
+        # if Neo4j cannot be reached this raises instead of quietly using something
+        # else.
+        from rag_retriever import build_retriever
+        fewshot_source = GraphFewShotSource(build_retriever(strategy="faiss", k=fewshot_k))
     elif fewshot_k == 0:
         fewshot_source = None
     if fewshot_source is not None and hasattr(fewshot_source, "attach_encoders"):
-        # df_train is passed so the source can register the in-distribution LOFO
-        # pool and use train records as exemplars (see attach_encoders).
-        fewshot_source.attach_encoders(encoders, df_train)
+        # df_train is passed to VERIFY the graph (its NTSB training events must be
+        # this split, with these labels), not as a retrieval pool. Validation and
+        # test ids are passed so their presence in the graph is caught here.
+        held_out = set(df_val["ev_id"].astype(str)) | set(df_test["ev_id"].astype(str))
+        fewshot_source.attach_encoders(encoders, df_train, forbidden_ids=held_out)
 
     mk = lambda d, r: NTSBSequenceDataset(d, encoders, retriever=r,
                                           fewshot_source=fewshot_source,

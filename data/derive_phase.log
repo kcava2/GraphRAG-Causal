@@ -1,0 +1,88 @@
+events: 0 done, 3055 to classify
+  50/3055 (0.91s each)
+  100/3055 (0.90s each)
+  150/3055 (0.90s each)
+  200/3055 (0.91s each)
+  250/3055 (0.90s each)
+  300/3055 (0.89s each)
+  350/3055 (0.90s each)
+  400/3055 (0.90s each)
+  450/3055 (0.89s each)
+  500/3055 (0.88s each)
+  550/3055 (0.89s each)
+  600/3055 (0.89s each)
+  650/3055 (0.91s each)
+  700/3055 (0.92s each)
+  750/3055 (0.93s each)
+  800/3055 (0.93s each)
+  850/3055 (0.94s each)
+  900/3055 (0.94s each)
+  950/3055 (0.95s each)
+  1000/3055 (0.96s each)
+  1050/3055 (0.97s each)
+  1100/3055 (0.97s each)
+  1150/3055 (0.98s each)
+  1200/3055 (0.97s each)
+  1250/3055 (0.97s each)
+  1300/3055 (0.96s each)
+  1350/3055 (0.96s each)
+  1400/3055 (0.95s each)
+  1450/3055 (0.95s each)
+  1500/3055 (0.94s each)
+  1550/3055 (0.93s each)
+  1600/3055 (0.92s each)
+  1650/3055 (0.91s each)
+  1700/3055 (0.90s each)
+  1750/3055 (0.89s each)
+  1800/3055 (0.89s each)
+  1850/3055 (0.89s each)
+  1900/3055 (0.88s each)
+  1950/3055 (0.88s each)
+  2000/3055 (0.88s each)
+  2050/3055 (0.88s each)
+  2100/3055 (0.87s each)
+  2150/3055 (0.87s each)
+  2200/3055 (0.88s each)
+  2250/3055 (0.89s each)
+  2300/3055 (0.89s each)
+  2350/3055 (0.90s each)
+  2400/3055 (0.90s each)
+  2450/3055 (0.91s each)
+  2500/3055 (0.91s each)
+  2550/3055 (0.92s each)
+  2600/3055 (0.92s each)
+  2650/3055 (0.92s each)
+  2700/3055 (0.93s each)
+  2750/3055 (0.93s each)
+  2800/3055 (0.93s each)
+  2850/3055 (0.93s each)
+  2900/3055 (0.94s each)
+  2950/3055 (0.94s each)
+  3000/3055 (0.94s each)
+  3050/3055 (0.95s each)
+  3055/3055 (0.95s each)
+test views: 0 done, 202 to classify
+  25/202
+  50/202
+  75/202
+  100/202
+  125/202
+  150/202
+  175/202
+  200/202
+  202/202
+phase distribution by source (% of events):
+origin                    ASIAS  ASRS  NTSB-corpus  NTSB-kg
+phase                                                      
+parked_or_ground_service     11    11           10        1
+pushback_or_towing            5     2            6        0
+taxi                         18     6           11        0
+takeoff                       9     8            6        6
+climb                        10    18           11       23
+cruise                       11    14           15       12
+descent                       6     7           16       14
+approach                      5    24            7       23
+landing                      21     4           17       14
+unknown                       4     7            2        7
+l1b_phase: unknown in 8% of briefs; agrees with the full-narrative phase in 75% of the 183 briefs where both are known
+l2_phase: unknown in 2% of briefs; agrees with the full-narrative phase in 91% of the 196 briefs where both are known

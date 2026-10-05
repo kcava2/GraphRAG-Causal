@@ -141,6 +141,10 @@ ASRS_IDMAP = os.path.join(_HERE, "asrs_id_map.csv")
 # sourced from the same population the LSTM predicts (counters domain shift).
 NTSB_FAISS = os.path.join(_HERE, "ntsb_kg.faiss")
 NTSB_IDMAP = os.path.join(_HERE, "ntsb_kg_id_map.csv")
+# NTSB TRAINING events written into the graph by `kg_builder.py --ingest-ntsb-train`.
+NTSB_TRAIN_FAISS = os.path.join(_HERE, "ntsb_train_kg.faiss")
+NTSB_TRAIN_IDMAP = os.path.join(_HERE, "ntsb_train_kg_id_map.csv")
+NTSB_TRAIN_ORIGIN = "ntsb_train"
 # Retrieval encoder: single source of truth is ntsbdataloader.RETRIEVAL_MODEL
 # (imported below). Do not redefine it here.
 
@@ -199,6 +203,101 @@ LIMIT $k
 """
 
 
+# ---------------------------------------------------------------------------
+# Exemplar retrieval reads the GRAPH and nothing else
+# ---------------------------------------------------------------------------
+# query field -> the context-node feature it is compared against
+_CTX_FEATURE = {
+    "visual_condition": "visual_condition",
+    "light_conditions": "light_conditions",
+    "person_involved": "person_involved",
+    "pilot_hours_bracket": "pilot_hours_bracket",
+    "employment_bracket": "employment_pressure",
+    "fuel_bracket": "fuel_cost_pressure",
+    "revenue_bracket": "revenue_pressure",
+    "loadfactor_bracket": "utilization_pressure",
+    "maintenance_defect_bracket": "maintenance_defect_rate",
+    "phase_of_flight": "phase_of_flight",
+}
+_NO_MATCH = "__no_match__"         # bound in place of an unusable query value
+
+# Structural similarity is scored by GROUP, not by field. Until 2026-10-04 every
+# field counted on its own, IDF-weighted, so the four economic brackets (all set by
+# the calendar month) plus the maintenance bracket (set by aircraft make and year)
+# carried about 70% of every match: "structurally similar" meant "same month, same
+# make". Grouping lets each kind of context count once, however many fields it has.
+#
+# Weights. Measured on TRAINING events only (pairs of training events: does sharing
+# a value make two events more likely to share a label?), none of the original
+# fields carries label information: every lift is within +/-0.03 and the most common
+# fields are slightly negative. Phase of flight is the one field that does. The
+# weights therefore put phase first and keep the HFACS context groups the design
+# calls for (environment, crew, organisational pressure, technology) as smaller,
+# equal contributions, so they shape the ranking among events of the same phase
+# rather than deciding it. Within a group, fields are IDF-weighted as before.
+# A group the query has no usable value for is left out and the rest renormalised,
+# so an L1 query (no phase, by definition) is scored on the remaining groups.
+STRUCT_GROUPS = {
+    "operation":    (0.50, ("phase_of_flight",)),
+    "environment":  (0.125, ("visual_condition", "light_conditions")),
+    "crew":         (0.125, ("person_involved", "pilot_hours_bracket")),
+    "organisation": (0.125, ("employment_pressure", "fuel_cost_pressure",
+                             "revenue_pressure", "utilization_pressure")),
+    "technology":   (0.125, ("maintenance_defect_rate",)),
+}
+_GROUP_OF = {f: g for g, (_w, fs) in STRUCT_GROUPS.items() for f in fs}
+
+# For one query: every graph event that shares at least one context node with it,
+# and WHICH features matched. Unlike _STRUCTURAL_CYPHER this returns no count and
+# has no LIMIT: the count ties heavily (a handful of distinct values), so the
+# matched features are weighted by rarity in Python and ranked there.
+_GRAPH_MATCH_CYPHER = """
+MATCH (e:EventNode)
+OPTIONAL MATCH (e)-[:HAS_ENV_CONTEXT]->(env:EnvironmentalContextNode)
+WHERE (env.feature = 'visual_condition' AND env.value = $visual_condition)
+   OR (env.feature = 'light_conditions' AND env.value = $light_conditions)
+WITH e, collect(DISTINCT env.feature) AS f1
+OPTIONAL MATCH (e)-[:HAS_PERSONNEL_CONTEXT]->(pc:PersonnelContextNode)
+WHERE (pc.feature = 'person_involved' AND pc.value = $person_involved)
+   OR (pc.feature = 'pilot_hours_bracket' AND pc.value = $pilot_hours_bracket)
+WITH e, f1, collect(DISTINCT pc.feature) AS c2
+WITH e, f1 + c2 AS f2
+OPTIONAL MATCH (e)-[:HAS_ORG_CONTEXT]->(oc:OrganizationalContextNode)
+WHERE (oc.feature = 'employment_pressure' AND oc.value_bracket = $employment_bracket)
+   OR (oc.feature = 'fuel_cost_pressure' AND oc.value_bracket = $fuel_bracket)
+   OR (oc.feature = 'revenue_pressure' AND oc.value_bracket = $revenue_bracket)
+   OR (oc.feature = 'utilization_pressure' AND oc.value_bracket = $loadfactor_bracket)
+WITH e, f2, collect(DISTINCT oc.feature) AS c3
+WITH e, f2 + c3 AS f3
+OPTIONAL MATCH (e)-[:HAS_TECH_CONTEXT]->(tc:TechnologicalContextNode)
+WHERE tc.feature = 'maintenance_defect_rate' AND tc.value_bracket = $maintenance_defect_bracket
+WITH e, f3, collect(DISTINCT tc.feature) AS c4
+WITH e, f3 + c4 AS f4
+OPTIONAL MATCH (e)-[:HAS_OPS_CONTEXT]->(op:OperationalContextNode)
+WHERE op.feature = 'phase_of_flight' AND op.value = $phase_of_flight
+WITH e, f4, collect(DISTINCT op.feature) AS c5
+WITH e, f4 + c5 AS matched
+WHERE size(matched) > 0
+RETURN e.event_id AS event_id, e.source AS source, matched
+"""
+
+_GRAPH_IDF_CYPHER = """
+MATCH (e:EventNode)-[:HAS_ENV_CONTEXT|HAS_PERSONNEL_CONTEXT|HAS_ORG_CONTEXT|HAS_TECH_CONTEXT|HAS_OPS_CONTEXT]->(c)
+RETURN c.feature AS feature, coalesce(c.value, c.value_bracket) AS value,
+       count(DISTINCT e) AS n
+"""
+
+
+# Structural matches depend only on the query's context values and the graph, so
+# they are shared by every retriever in the process (C3, C4 and C5 ask the same
+# questions). The graph is never written during training or evaluation.
+_STRUCT_CACHE = {}
+
+
+class GraphUnavailable(RuntimeError):
+    """Exemplar retrieval was asked for but the knowledge graph cannot serve it."""
+
+
 def _minmax(scores: dict) -> dict:
     """Min-max normalize dict values to [0,1]; if all equal, map to 1.0."""
     if not scores:
@@ -243,7 +342,11 @@ class RAGRetriever:
         self.ntsb_weight = ntsb_weight
         self._sbert = None
         self._faiss = {}                    # source -> (index, [event_id,...])
-        self._lofo = None                   # NTSB source = in-distribution LOFO (set_source_df)
+        self._lofo = None                   # legacy prior path only (set_source_df)
+        self._universe_cache = None         # every retrievable graph event + its vector
+        self._idf_cache = None              # rarity of each context value in the graph
+        self._struct_cache = _STRUCT_CACHE  # query context -> {event key: share}
+        self._attr_cache = None
         self.driver = None
         self.database = os.environ.get("NEO4J_DATABASE", "neo4j")
         self._load_faiss()
@@ -353,15 +456,10 @@ class RAGRetriever:
         return dict(sorted(merged.items(), key=lambda kv: kv[1], reverse=True)[:k])
 
     # ---- Mode 2: deterministic schema-grounded Cypher structural search ----
-    def _cypher_scores(self, record: dict, k: int | None = None,
-                       absolute: bool = False) -> dict:
-        """Structural retrieval: score candidates by shared STRUCTURED CONTEXT.
+    def _cypher_scores(self, record: dict, k: int | None = None) -> dict:
+        """LEGACY prior path only — exemplar retrieval uses `_structural_shares`.
 
-        `absolute=True` (used for exemplars) scores each candidate as the SHARE of
-        the query structured context it matches, instead of min-max normalising
-        within the returned set. Min-max forces the weakest returned candidate to
-        exactly 0 whatever it matched, which is meaningless as a similarity and
-        removes that neighbour from the exemplar vote.
+        Structural retrieval: score candidates by shared STRUCTURED CONTEXT.
 
         Two sources, merged:
 
@@ -401,12 +499,7 @@ class RAGRetriever:
         # slot. A train record with the right label distribution is worth more than
         # any ASIAS match here, so the ordering is made explicit rather than left to
         # near-equal weights.
-        if absolute and self._lofo is not None:
-            top = max(self._lofo.context_max(record), 1e-9)
-            norm_ctx = {key: min(v / top, 1.0) for key, v in ctx_scores.items()}
-        else:
-            norm_ctx = _minmax(ctx_scores)
-        out = {key: 0.5 + 0.5 * v for key, v in norm_ctx.items()}
+        out = {key: 0.5 + 0.5 * v for key, v in _minmax(ctx_scores).items()}
         if self.driver is None:
             return out
         kg_scores = {}
@@ -428,9 +521,7 @@ class RAGRetriever:
             w = {"ASIAS": self.asias_weight, "ASRS": self.asrs_weight}
             # The Cypher score counts matched context nodes: at most 2 env + 2
             # personnel + 4 organizational + 1 technological.
-            norm_kg = ({key: min(v / 9.0, 1.0) for key, v in kg_scores.items()}
-                       if absolute else _minmax(kg_scores))
-            for key, v in norm_kg.items():
+            for key, v in _minmax(kg_scores).items():
                 out[key] = 0.49 * v * w.get(key[1], 0.33) / max(self.asias_weight,
                                                                 self.asrs_weight, 1e-9)
             return out
@@ -448,136 +539,257 @@ class RAGRetriever:
         combined = {k: 0.5 * f.get(k, 0.0) + 0.5 * c.get(k, 0.0) for k in keys}
         return dict(sorted(combined.items(), key=lambda kv: kv[1], reverse=True)[:self.k])
 
-    def _combine_abs(self, faiss_scores: dict, cypher_scores: dict) -> dict:
-        """Combine on ABSOLUTE scales, for exemplars. `_combine` is left untouched
-        because the legacy prior conditions were produced with it.
+    # ---- graph-only exemplar retrieval -------------------------------------
+    def require_graph(self):
+        """Stop, loudly, if the graph cannot be read.
 
-        Semantic scores are source-weighted cosines; dividing by the largest source
-        weight puts them back on the cosine scale. Structural scores are already
-        in [0, 1]. One strategy -> that score as is; hybrid -> their mean, with a
-        candidate missing from one side scoring 0 there.
+        Exemplar retrieval used to degrade in silence: with Neo4j down or the
+        password unset it fell back to an in-memory pool of training records and
+        the run looked healthy. There is no such pool any more. No graph, no
+        retrieval, and that is an error rather than a warning.
         """
-        wmax = max(self.asias_weight, self.asrs_weight, self.ntsb_weight, 1e-9)
-        f = {key: max(v / wmax, 0.0) for key, v in faiss_scores.items()}
-        c = dict(cypher_scores)
-        if self.strategy == "faiss":
-            return f
-        if self.strategy == "cypher":
-            return c
-        return {key: 0.5 * f.get(key, 0.0) + 0.5 * c.get(key, 0.0) for key in set(f) | set(c)}
+        if self.driver is None:
+            raise GraphUnavailable(
+                "Cannot reach the Neo4j knowledge graph, and exemplar retrieval reads "
+                "nothing else.\n  1. Start the database in Neo4j Desktop.\n"
+                "  2. In THIS terminal:  $env:NEO4J_PASSWORD = \"<password>\"\n"
+                "  3. Check:  python run_all.py --preflight-only --start-at 5 --stop-after 8")
 
-    def _complete_hybrid(self, record, text, faiss_scores, cypher_scores):
-        """Give every in-distribution candidate BOTH of its scores (in place).
+    def _universe(self) -> dict:
+        """Every retrievable graph event with its narrative vector.
 
-        The two strategies return different candidate sets. A candidate found by
-        only one used to score 0 on the other side, so a pure context match
-        (structural up to 1.0, halved to 0.5) outranked any semantic match (cosine
-        ~0.75, halved to ~0.37): the hybrid top-k filled with context matches, which
-        carry almost no label signal, and hybrid scored well below semantic alone.
-        Both scores are cheap to compute for a train record, so they are filled in
-        and the ranking reflects both. KG candidates are left as they are: their
-        missing side would need a Cypher round-trip per candidate.
+        The vectors come from the FAISS indexes built alongside the graph
+        (ASIAS, ASRS, the NTSB-KG slice, and the NTSB training events); an event is
+        kept only if it actually exists as a node in Neo4j. A source whose weight
+        is 0 is left out, which is how a single-source ablation is run.
         """
-        if self._lofo is None or self.ntsb_weight <= 0:
-            return
-        need_f = [e for (e, src) in cypher_scores
-                  if src == "NTSB" and (e, src) not in faiss_scores]
-        if need_f and _clean(text):
-            for e, sim in self._lofo.similarity(self._embed(text), need_f).items():
-                faiss_scores[(e, "NTSB")] = sim * self.ntsb_weight
-        need_c = [e for (e, src) in faiss_scores
-                  if src == "NTSB" and (e, src) not in cypher_scores]
-        if need_c:
-            top = max(self._lofo.context_max(record), 1e-9)
-            for e, sc in self._lofo.context_scores(record, need_c).items():
-                cypher_scores[(e, "NTSB")] = 0.5 + 0.5 * min(sc / top, 1.0)
+        if self._universe_cache is not None:
+            return self._universe_cache
+        self.require_graph()
+        import faiss
+        attrs = self.event_attributes()
+        wanted = (("ASIAS", ASIAS_FAISS, ASIAS_IDMAP, self.asias_weight),
+                  ("ASRS", ASRS_FAISS, ASRS_IDMAP, self.asrs_weight),
+                  ("NTSB", NTSB_FAISS, NTSB_IDMAP, self.ntsb_weight),
+                  ("NTSB", NTSB_TRAIN_FAISS, NTSB_TRAIN_IDMAP, self.ntsb_weight))
+        keys, vecs, seen = [], [], set()
+        for src, fp, mp, weight in wanted:
+            if weight <= 0 or not (os.path.exists(fp) and os.path.exists(mp)):
+                continue
+            index = faiss.read_index(fp)
+            ids = pd.read_csv(mp, dtype=str)["event_id"].tolist()
+            allv = index.reconstruct_n(0, index.ntotal)
+            for i, eid in enumerate(ids[:index.ntotal]):
+                key = (eid, src)
+                if key in attrs and key not in seen:      # a real node, once
+                    seen.add(key); keys.append(key); vecs.append(allv[i])
+        if not keys:
+            raise GraphUnavailable(
+                "The graph is reachable but no event in it has a narrative vector. "
+                "Build the indexes:  python run_all.py --start-at 8 --stop-after 8")
+        E = np.ascontiguousarray(np.stack(vecs), dtype="float32")
+        sb = self._ensure_sbert()
+        dim = getattr(sb, "get_embedding_dimension", None) or sb.get_sentence_embedding_dimension
+        if E.shape[1] != dim():
+            raise GraphUnavailable(
+                f"FAISS vectors are {E.shape[1]}-dimensional but the retrieval encoder "
+                f"({RETRIEVAL_MODEL}) is not. Rebuild the indexes (run_all.py stage 8).")
+        self._universe_cache = {"keys": keys, "E": E, "pos": {k: i for i, k in enumerate(keys)}}
+        by_src = {}
+        for eid, src in keys:
+            o = "NTSB-train" if attrs[(eid, src)].get("origin") == NTSB_TRAIN_ORIGIN else src
+            by_src[o] = by_src.get(o, 0) + 1
+        logging.info("RAG: %d retrievable graph events %s", len(keys), by_src)
+        n_phase = self.driver.execute_query(
+            "MATCH (e:EventNode)-[:HAS_OPS_CONTEXT]->(:OperationalContextNode "
+            "{feature:'phase_of_flight'}) RETURN count(DISTINCT e) AS n",
+            database_=self.database)[0][0]["n"]
+        if n_phase == 0 and self.strategy in ("cypher", "hybrid"):
+            logging.warning("RAG: no graph event has a phase-of-flight node, so structural "
+                            "retrieval is matching on weather, crew and calendar context "
+                            "only. Run:  python data/kg_builder.py --update-phase")
+        self._universe_cache["n_with_phase"] = n_phase
+        self._universe_cache["by_source"] = by_src
+        return self._universe_cache
+
+    def _idf(self) -> dict:
+        """{(feature, value): log(N / events carrying it)} over the whole graph, so
+        matching a rare context value counts for more than matching 'VMC'."""
+        if self._idf_cache is None:
+            self.require_graph()
+            recs, _, _ = self.driver.execute_query(_GRAPH_IDF_CYPHER, database_=self.database)
+            n_ev, _, _ = self.driver.execute_query(
+                "MATCH (e:EventNode) RETURN count(e) AS n", database_=self.database)
+            total = max(int(n_ev[0]["n"]), 1)
+            self._idf_cache = {(r["feature"], str(r["value"])): float(np.log(total / max(r["n"], 1)))
+                               for r in recs if r["feature"]}
+        return self._idf_cache
+
+    def _structural_shares(self, record: dict) -> dict:
+        """{event key: structural similarity in [0, 1]}, from one Cypher query.
+
+        Similarity = sum over context GROUPS of (group weight x share of that
+        group's query context the event matches), divided by the total weight of
+        the groups the query has a usable value for. Within a group each field is
+        weighted by how rare its value is in the graph (IDF). See STRUCT_GROUPS.
+        """
+        self.require_graph()
+        q = {f: str(record.get(f, "") or "") for f in CYPHER_PARAMS + ["phase_of_flight"]}
+        q["maintenance_defect_bracket"] = _sdr_bracket(record.get("acft_make", ""),
+                                                       record.get("year", "")) or ""
+        usable = {f: v for f, v in q.items() if v and v.lower() not in ("nan", "unknown", "none")}
+        cache_key = tuple(sorted(usable.items()))
+        if cache_key in self._struct_cache:
+            return self._struct_cache[cache_key]
+        idf = self._idf()
+        feat_w = {_CTX_FEATURE[f]: idf.get((_CTX_FEATURE[f], v), 0.0) for f, v in usable.items()}
+        group_tot = {}
+        for f, w in feat_w.items():
+            g = _GROUP_OF.get(f)
+            if g is None:                                 # field not used for matching
+                continue
+            group_tot[g] = group_tot.get(g, 0.0) + w
+        group_tot = {g: t for g, t in group_tot.items() if t > 0}
+        weight_sum = sum(STRUCT_GROUPS[g][0] for g in group_tot)
+        out = {}
+        if weight_sum > 0:
+            params = {f: usable.get(f, _NO_MATCH) for f in _CTX_FEATURE}
+            recs, _, _ = self.driver.execute_query(_GRAPH_MATCH_CYPHER,
+                                                   database_=self.database, **params)
+            for r in recs:
+                got = {}
+                for f in set(r["matched"]):
+                    g = _GROUP_OF.get(f)
+                    if g in group_tot:
+                        got[g] = got.get(g, 0.0) + feat_w.get(f, 0.0)
+                score = sum(STRUCT_GROUPS[g][0] * got[g] / group_tot[g] for g in got) / weight_sum
+                if score > 0:
+                    out[(str(r["event_id"]), str(r["source"]))] = float(min(score, 1.0))
+        self._struct_cache[cache_key] = out
+        return out
 
     def ranked_neighbors(self, record: dict, k: int | None = None,
                          fetch: int | None = None) -> list:
-        """Top-k neighbours as [((event_id, source), score), ...], highest first.
+        """Top neighbours as [((event_id, source), score), ...], highest first.
 
-        Same candidate sources `retrieve()` uses — semantic FAISS and/or structural
-        context per `self.strategy` — but scored on ABSOLUTE scales (`_combine_abs`)
-        and stopped BEFORE the per-neighbour labels are pooled into priors. This is
-        what few-shot needs: the neighbours themselves, with a similarity that
-        means the same thing from one query to the next.
+        EVERY candidate is an event in the knowledge graph. There is no other pool.
 
-        `fetch` returns more candidates than `k`; the caller keeps the first `k`
-        that have an exemplar row. `k` alone used to be capped at the retriever
-        TOP_K, so asking for 15 exemplars silently returned 5.
+            faiss   -> cosine between the query narrative and the event's narrative
+            cypher  -> share of the query's structured context the event matches
+            hybrid  -> the mean of the two, for every event (each event has both)
 
-        Returns [] on any failure, which the caller must treat as "no exemplars"
-        (a zero-filled, masked-out block) rather than as an error.
+        All sources are scored on the same scale and compete on similarity alone:
+        no per-source weights, no bands, no quotas. The query's own event is
+        excluded, so a training event never retrieves itself; validation and test
+        events are not in the graph to begin with.
+
+        Scores are absolute, never rescaled per query, so "0.8" means the same
+        thing for every record and no neighbour is forced to zero.
+
+        Raises GraphUnavailable when the graph cannot be read. It does not return
+        an empty list and carry on.
         """
-        try:
-            k = int(k or self.k)
-            depth = int(fetch or k)                        # candidates per strategy
-            text = record.get("combined_text", "")
-            exclude_id = record.get("ev_id", "")          # LOFO self-exclusion
-            faiss_scores = (self._faiss_scores(text, exclude_id, k=depth)
-                            if self.strategy in ("hybrid", "faiss") else {})
-            cypher_scores = (self._cypher_scores(record, k=depth, absolute=True)
-                             if self.strategy in ("hybrid", "cypher") else {})
-            if self.strategy == "hybrid":
-                self._complete_hybrid(record, text, faiss_scores, cypher_scores)
-            combined = self._combine_abs(faiss_scores, cypher_scores)
-            items = sorted(combined.items(), key=lambda kv: kv[1], reverse=True)
-            return items[:depth]
-        except Exception as e:
-            logging.warning("RAG: ranked_neighbors failed (%s) — no exemplars.", e)
-            return []
+        k = int(k or self.k)
+        depth = int(fetch or k)
+        uni = self._universe()
+        keys, n = uni["keys"], len(uni["keys"])
+        text = record.get("combined_text", "")
+        sem = struct = None
+        if self.strategy in ("faiss", "hybrid") and _clean(text):
+            sem = uni["E"] @ self._embed(text)[0]
+        if self.strategy in ("cypher", "hybrid"):
+            shares = self._structural_shares(record)
+            struct = np.zeros(n, dtype="float32")
+            for key, share in shares.items():
+                i = uni["pos"].get(key)
+                if i is not None:
+                    struct[i] = share
+        if self.strategy == "faiss":
+            score = sem
+        elif self.strategy == "cypher":
+            score = struct
+        else:
+            score = 0.5 * (sem if sem is not None else 0.0) + 0.5 * struct
+        if score is None:
+            return []                                     # no narrative to search with
+        score = np.asarray(score, dtype="float64").copy()
+        me = uni["pos"].get((str(record.get("ev_id", "")), "NTSB"))
+        if me is not None:
+            score[me] = -np.inf                           # never retrieve yourself
+        # Structural scores tie in large blocks. Break ties with a draw that is
+        # fixed per query, so the order is reproducible but favours no source.
+        import zlib
+        tie = np.random.RandomState(zlib.crc32(str(record.get("ev_id", "")).encode())).rand(n)
+        order = np.lexsort((tie, -score))
+        return [(keys[i], float(score[i])) for i in order[:depth] if score[i] > 0]
 
     def event_attributes(self) -> dict:
-        """Every KG event's labels and context in ONE query -> {(event_id, source): {...}}.
+        """Every graph event's labels, context and outcome in one query
+        -> {(event_id, source): {...}}. Cached for the life of the retriever.
 
-        Few-shot needs each neighbour's FEATURES as well as its labels, and doing
-        that per neighbour would be ~5k round-trips per epoch-zero pass. The graph
-        holds ~2k events, so it is far cheaper to pull the lot once and look up
-        locally. NTSB events are included but are normally served by the LOFO
-        source instead (see GraphFewShotSource).
+        Exemplars need each neighbour's features as well as its labels, and one
+        query per neighbour would be thousands of round-trips, so the lot is pulled
+        once and looked up locally.
+
+        `origin` is 'ntsb_train' for the NTSB training events written by
+        `kg_builder.py --ingest-ntsb-train`; their labels come from the same
+        extraction as the prediction targets. Every other event was labelled by the
+        KG builder's own prompt.
+
+        `causal` is the event's extracted causal chain as (cause tier, effect tier)
+        pairs. Training events store theirs on the node. For the rest it is read
+        from evidence-bearing LEADS_TO edges: edges without evidence come from
+        classify_edge's deterministic DAG mapping and are a pure function of the
+        factor set, so they would add nothing the exemplar does not already have.
         """
-        if self.driver is None:
-            return {}
-        try:
-            recs, _, _ = self.driver.execute_query(
-                "MATCH (e:EventNode) "
-                "OPTIONAL MATCH (e)-[:HAS_FACTOR]->(f:HFACSFactorNode) "
-                "OPTIONAL MATCH (e)-[:HAS_ENV_CONTEXT]->(env:EnvironmentalContextNode) "
-                "OPTIONAL MATCH (e)-[:HAS_PERSONNEL_CONTEXT]->(pc:PersonnelContextNode) "
-                # Only EVIDENCE-bearing LEADS_TO: those are the LLM-extracted causal
-                # links. Edges without evidence come from classify_edge's
-                # deterministic DAG mapping and are a pure function of the factor
-                # set, so they would add nothing the exemplar does not already have.
-                "OPTIONAL MATCH (e)-[:HAS_FACTOR]->(a:HFACSFactorNode) "
-                "                 -[l:LEADS_TO]->(b:HFACSFactorNode) "
-                "                 <-[:HAS_FACTOR]-(e) "
-                "WHERE l.evidence IS NOT NULL "
-                "RETURN e.event_id AS eid, e.source AS src, "
-                "       e.severity_class AS sev, "
-                "       collect(DISTINCT f.tier) AS tiers, "
-                "       collect(DISTINCT [env.feature, env.value]) AS env, "
-                "       collect(DISTINCT [pc.feature, pc.value]) AS pers, "
-                "       collect(DISTINCT [a.tier, b.tier]) AS causal",
-                database_=self.database)
-            out = {}
-            for r in recs:
-                ctx = {}
-                for pair in (r["env"] or []) + (r["pers"] or []):
-                    if isinstance(pair, list) and len(pair) == 2 and pair[0]:
-                        ctx[pair[0]] = pair[1]
+        if self._attr_cache is not None:
+            return self._attr_cache
+        self.require_graph()
+        recs, _, _ = self.driver.execute_query(
+            "MATCH (e:EventNode) "
+            "OPTIONAL MATCH (e)-[:HAS_FACTOR]->(f:HFACSFactorNode) "
+            "WITH e, collect(DISTINCT f.tier) AS tiers "
+            "OPTIONAL MATCH (e)-[:HAS_ENV_CONTEXT]->(env:EnvironmentalContextNode) "
+            "WITH e, tiers, collect(DISTINCT [env.feature, env.value]) AS env "
+            "OPTIONAL MATCH (e)-[:HAS_PERSONNEL_CONTEXT]->(pc:PersonnelContextNode) "
+            "WITH e, tiers, env, collect(DISTINCT [pc.feature, pc.value]) AS pers "
+            "OPTIONAL MATCH (e)-[:HAS_FACTOR]->(a:HFACSFactorNode) "
+            "                 -[l:LEADS_TO]->(b:HFACSFactorNode) "
+            "                 <-[:HAS_FACTOR]-(e) "
+            "WHERE l.evidence IS NOT NULL "
+            "RETURN e.event_id AS eid, e.source AS src, e.severity_class AS sev, "
+            "       e.origin AS origin, e.causal_links AS links, tiers, env, pers, "
+            "       collect(DISTINCT [a.tier, b.tier]) AS causal",
+            database_=self.database)
+        out = {}
+        for r in recs:
+            ctx = {}
+            for pair in (r["env"] or []) + (r["pers"] or []):
+                if isinstance(pair, list) and len(pair) == 2 and pair[0]:
+                    ctx[pair[0]] = pair[1]
+            if r["origin"] == NTSB_TRAIN_ORIGIN:
+                causal = [tuple(x.split(">", 1)) for x in (r["links"] or []) if ">" in x]
+            else:
                 causal = [(e[0], e[1]) for e in (r["causal"] or [])
                           if isinstance(e, list) and len(e) == 2 and e[0] and e[1]]
-                out[(r["eid"], r["src"])] = {
-                    "tiers": [t for t in (r["tiers"] or []) if t],
-                    "severity": r["sev"],
-                    "context": ctx,
-                    "causal": causal,
-                }
-            logging.info("RAG: cached attributes for %d KG events.", len(out))
-            return out
-        except Exception as e:
-            logging.warning("RAG: event_attributes failed (%s).", e)
-            return {}
+            out[(r["eid"], r["src"])] = {
+                "tiers": [t for t in (r["tiers"] or []) if t],
+                "severity": r["sev"],
+                "context": ctx,
+                "causal": causal,
+                "origin": r["origin"],
+            }
+        logging.info("RAG: cached attributes for %d KG events.", len(out))
+        self._attr_cache = out
+        return out
+
+    def graph_meta(self, key: str = NTSB_TRAIN_ORIGIN) -> dict:
+        """The bookkeeping node the ingestion step leaves behind ({} if absent)."""
+        self.require_graph()
+        recs, _, _ = self.driver.execute_query(
+            "MATCH (m:KGMeta {key:$k}) RETURN m.signature AS signature, m.n AS n, "
+            "m.updated AS updated", k=key, database_=self.database)
+        return dict(recs[0]) if recs else {}
 
     def _fetch_factors(self, event_id: str, source: str):
         """Distinct HFACS TIERS of the event — the tier is the prior's atomic unit
@@ -733,37 +945,6 @@ class LOFORetriever:
             for f, v in row.items():
                 counts[(f, v)] = counts.get((f, v), 0) + 1
         self._idf = {k: float(np.log(n / c)) for k, c in counts.items()}
-
-    def context_max(self, record: dict) -> float:
-        """IDF mass a candidate would score by matching EVERY usable context field
-        of `record` — the denominator that turns a context score into a share."""
-        q = {p: str(record.get(p, "") or "") for p in CYPHER_PARAMS}
-        return float(sum(self._idf.get((f, v), 0.0) for f, v in q.items()
-                         if v and v.lower() not in ("", "nan", "unknown")))
-
-    def context_scores(self, record: dict, ev_ids) -> dict:
-        """IDF-weighted context agreement with `record` for the given train ids."""
-        q = {p: str(record.get(p, "") or "") for p in CYPHER_PARAMS}
-        q = {f: v for f, v in q.items() if v and v.lower() not in ("", "nan", "unknown")}
-        out = {}
-        for e in ev_ids:
-            i = self._pos.get(str(e))
-            if i is not None:
-                row = self._ctx[i]
-                out[str(e)] = float(sum(self._idf.get((f, v), 0.0)
-                                        for f, v in q.items() if row.get(f) == v))
-        return out
-
-    def similarity(self, emb, ev_ids) -> dict:
-        """Cosine between a query vector and the given train ids."""
-        if self._emb is None or emb is None:
-            return {}
-        out = {}
-        for e in ev_ids:
-            i = self._pos.get(str(e))
-            if i is not None:
-                out[str(e)] = float(self._emb[i] @ emb[0])
-        return out
 
     def context_neighbors(self, record: dict, exclude_id: str, k: int) -> list:
         """Top-k (ev_id, score) by IDF-weighted agreement on STRUCTURED context.

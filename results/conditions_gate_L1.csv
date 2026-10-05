@@ -1,5 +1,5 @@
-condition,query_view,B:operator,B:personnel,B:situational,C:skill,C:decision,C:perception,C:violation,D:severity,_mean_similarity,_mean_exemplars
-C2,L1,0.5435,0.5413,0.5023,0.551,0.5289,0.4955,0.75,0.6084,0.5538,14.8465
-C3,L1,0.5108,0.4983,0.505,0.4759,0.4683,0.4527,0.3325,0.5037,0.897,15.0
-C4,L1,0.5879,0.5087,0.4878,0.5379,0.5245,0.5121,0.2375,0.5787,0.6703,15.0
-C5,L1,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5787,0.6703,15.0
+condition,query_view,_mean_similarity,_mean_exemplars,_share_ntsb_train,_share_with_outcome,B:operator,B:personnel,B:situational,C:skill,C:decision,C:perception,C:violation,D:severity,corpus|B:operator,corpus|B:personnel,corpus|B:situational,corpus|C:skill,corpus|C:decision,corpus|C:perception,corpus|C:violation,corpus|D:severity,other|B:operator,other|B:personnel,other|B:situational,other|C:skill,other|C:decision,other|C:perception,other|C:violation,other|D:severity
+C2,L1,0.5817,15.0,0.6182,0.9297,0.5849,0.4803,0.5238,0.5465,0.4774,0.6298,0.8291,0.5916,0.5516,0.4972,0.4674,0.5345,0.5225,0.6182,0.7605,0.614,0.4881,0.4995,0.526,0.4738,0.4595,0.5161,0.5963,0.4945
+C3,L1,0.871,15.0,0.6426,0.896,0.54,0.4563,0.4788,0.5021,0.4804,0.6174,0.6147,0.541,0.5201,0.5103,0.5242,0.4706,0.5605,0.6202,0.7152,0.5058,0.462,0.5119,0.4947,0.4053,0.4069,0.5022,0.4849,0.4685
+C4,L1,0.6591,15.0,0.7439,0.9396,0.5529,0.5238,0.5366,0.473,0.505,0.6519,0.7856,0.6162,0.5955,0.5229,0.5301,0.4557,0.5248,0.5962,0.6776,0.5606,0.4711,0.4863,0.5183,0.4611,0.4207,0.6123,0.6039,0.4612
+C5,L1,0.6591,15.0,0.7439,0.9396,,,,,,,,0.6162,,,,,,,,0.5606,,,,,,,,0.4612

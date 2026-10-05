@@ -16,13 +16,17 @@ guarantee. For every view of the TEST text it reports three things:
                    vocabulary, which the transfer probe would not recognise.
   blocklist        Count of briefs still containing a forbidden term.
 
-Two gates, one per view that is reported:
+Gates:
 
-  L2 (the standard view)  must contain no outcome wording and no causal
-      attribution: zero blocklist hits. Its severity AUC is reported but NOT gated,
-      because L2 names the kind of event on purpose, and in this corpus the kind of
-      event largely determines severity. That is why head D is not scored under L2.
-  L1 (the lower bound)    must not predict severity: both probes at or below 0.65.
+  L1b (the standard view)  must contain no outcome, cause or occurrence wording:
+      zero blocklist hits. Its severity AUC is reported with a WARNING and is not
+      gated: L1b states the phase of flight on purpose, and in this corpus the
+      phase largely determines severity. A head D score under L1b must be reported
+      with that caveat.
+  L1 (the lower bound)     must not predict severity: both probes at or below 0.65.
+      This is the only reduced view under which head D is a clean prediction.
+  L2 (comparison)          must contain no outcome wording and no causal
+      attribution. Severity reported, not gated; head D is not scored under L2.
 
 Reading it: the SEVERITY row is the leakage meter. Structured fields alone predict
 severity at ~0.57 on this split; a clean L1 view should sit near that. The gate is
@@ -144,30 +148,34 @@ def main():
     ok = True
     print()
     hits = R.groupby("view")["briefs_with_blocklist_hit"].first()
-    if "L2 preliminary" in sev.index:
-        l2 = sev.loc["L2 preliminary"]
-        l2_ok = int(hits.get("L2 preliminary", 0) or 0) == 0
-        ok = ok and l2_ok
-        print(f"L2  (standard view) wording gate: {int(hits.get('L2 preliminary', 0) or 0)} "
-              f"briefs with outcome or cause wording -> {'PASS' if l2_ok else 'FAIL'}")
-        print(f"L2  severity from the text alone: transfer {l2.transfer_auc:.3f}, within "
-              f"{l2.within_auc:.3f} (reported, not gated: L2 names the kind of event, so "
-              f"head D is not scored under it)")
+    nhit = lambda name: int(hits.get(name, 0) or 0)
+    if "L1b circumstances+phase" in sev.index:
+        r = sev.loc["L1b circumstances+phase"]
+        b_ok = nhit("L1b circumstances+phase") == 0
+        ok = ok and b_ok
+        print(f"L1b (standard view) wording gate: {nhit('L1b circumstances+phase')} briefs "
+              f"with outcome, cause or occurrence wording -> {'PASS' if b_ok else 'FAIL'}")
+        print(f"L1b severity from the text alone: transfer {r.transfer_auc:.3f}, within "
+              f"{r.within_auc:.3f}. WARNING: not gated. The phase of flight gives severity "
+              f"away, so report head D under L1b with that caveat.")
     else:
         ok = False
-        print("L2  (standard view): briefs missing -> FAIL. Run data/build_query_views.py")
+        print("L1b (standard view): briefs missing -> FAIL. Run data/build_query_views.py")
     if "L1 pre-departure" in sev.index:
         l1 = sev.loc["L1 pre-departure"]
         worst = np.nanmax([l1.transfer_auc, l1.within_auc])
-        l1_ok = worst <= GATE and int(hits.get("L1 pre-departure", 0) or 0) == 0
+        l1_ok = worst <= GATE and nhit("L1 pre-departure") == 0
         ok = ok and l1_ok
         print(f"L1  (lower bound) severity gate: transfer {l1.transfer_auc:.3f}, within "
               f"{l1.within_auc:.3f} (gate {GATE}; structured-only is ~0.57) -> "
               f"{'PASS' if l1_ok else 'FAIL'}")
-    if "L1b circumstances+phase" in sev.index:
-        r = sev.loc["L1b circumstances+phase"]
-        print(f"L1b (optional diagnostic): transfer {r.transfer_auc:.3f}, within "
-              f"{r.within_auc:.3f} (not gated, not part of the standard run)")
+    if "L2 preliminary" in sev.index:
+        l2 = sev.loc["L2 preliminary"]
+        l2_ok = nhit("L2 preliminary") == 0
+        ok = ok and l2_ok
+        print(f"L2  (comparison) wording gate: {nhit('L2 preliminary')} briefs with outcome "
+              f"or cause wording -> {'PASS' if l2_ok else 'FAIL'}; severity from the text "
+              f"alone {l2.transfer_auc:.3f} (head D is not scored under L2)")
     return 0 if ok else 2
 
 

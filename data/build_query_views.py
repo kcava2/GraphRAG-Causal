@@ -7,23 +7,23 @@ narrative, the factual narrative AND the probable-cause statement. At test time
 that is the answer key. This script writes what an analyst would actually hold at
 earlier moments, for the TEST records only:
 
-    L2   preliminary     THE STANDARD VIEW. Circumstances, the kind of event and its
-                         sequence, as a preliminary report states them. No injury
-                         or damage wording and no causal attribution.
-    L1   pre-departure   Lower bound. What a dispatcher knew before the flight left:
-                         operator, aircraft, route, date and time of day, weather,
-                         crew. Nothing about where in the flight the event happened.
-    L1b  circumstances   Optional diagnostic, written only with --tiers L1b. L1 plus
-                         the phase of flight and what the crew were doing, but not
-                         WHAT happened.
+    L1b  circumstances   THE STANDARD VIEW. The flight and what it was doing when
+                         the event occurred: operator, aircraft, route, weather,
+                         crew, the phase of flight, position, what the crew were
+                         doing. Not WHAT happened, how it ended, or why.
+    L1   pre-departure   Lower bound. Only what a dispatcher knew before the flight
+                         left. Nothing about where in the flight the event happened.
+    L2   preliminary     Comparison. L1b plus the kind of event and its sequence,
+                         as a preliminary report states them. No injury or damage
+                         wording and no causal attribution.
 
-L2 is the level the evaluation is reported at: it is what someone really holds when
-they go looking for similar past events, a few days to two weeks after the
-occurrence. L1 is kept as the floor, because it shows what is knowable before the
-event (nothing, as it turns out). L1b is no longer part of the standard run. It was
-the first attempt at "circumstances only" and it fails the severity leakage audit
-(AUC ~0.88 with every outcome word removed), because in Part-121 data the phase of
-flight all but determines the kind of event.
+L1b is the level the evaluation is reported at. One property of it must be stated
+with any severity result: it contains no outcome wording and passes the blocklist,
+yet it still predicts severity at AUC ~0.88, because in Part-121 data the phase of
+flight all but determines the kind of event (a cruise event with cabin crew standing
+is a turbulence injury; a taxi event is a ground collision with nobody hurt). L1
+removes the phase and is the only reduced view under which a severity score is a
+clean prediction; it is kept as the lower bound for exactly that reason.
 
 Nothing else is rewritten. Train and validation records, the exemplar pool, the
 knowledge graph and every FAISS index keep their full narratives — the historical
@@ -38,7 +38,7 @@ gated by data/leakage_audit.py, not trusted on the prompt's say-so.
     python data/build_query_views.py                 # all test records, resumable
     python data/build_query_views.py --limit 5       # smoke test
 
-Output: data/test_query_views.csv  (ev_id, l2_text, l1_text, [l1b_text], + attempts/dropped)
+Output: data/test_query_views.csv  (ev_id, l1b_text, l1_text, l2_text, + attempts/dropped)
 """
 
 import argparse
@@ -54,8 +54,8 @@ from ntsbdataloader import load_and_join, _split, NTSB_CLEAN  # noqa: E402
 from ollama_json import chat_json, DEFAULT_MODEL              # noqa: E402
 
 OUT = os.path.join(_HERE, "test_query_views.csv")
-TIERS = ("L2", "L1", "L1b")                 # every tier the script can write
-DEFAULT_TIERS = ("L2", "L1")                # the standard view and its lower bound
+TIERS = ("L1b", "L1", "L2")                 # every tier the script can write
+DEFAULT_TIERS = ("L1b", "L1", "L2")         # standard view, lower bound, comparison
 COL = {"L1": "l1", "L1b": "l1b", "L2": "l2"}
 _SCHEMA = {"type": "object", "properties": {"brief": {"type": "string"}},
            "required": ["brief"]}
@@ -184,8 +184,8 @@ def main():
                     help="'val' exists only for the optional threshold diagnostic; "
                          "the evaluation protocol rewrites the TEST split only.")
     ap.add_argument("--tiers", nargs="+", choices=TIERS, default=list(DEFAULT_TIERS),
-                    help="Tiers to write. Default: L2 (the standard view) and L1 (the "
-                         "lower bound). L1b is an optional diagnostic.")
+                    help="Tiers to write. Default: all three. L1b is the standard "
+                         "view, L1 the lower bound, L2 the comparison.")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--max-attempts", type=int, default=4)
     ap.add_argument("--out", default=None)
